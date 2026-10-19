@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,60 +18,317 @@ import (
 //go:embed baseprompt.json
 var basepromptJSON []byte
 
-// cpaToUpstreamKey maps CPA-facing model names to upstream keys.
-// Unknown names pass through unchanged (server silently routes to auto).
+// cpaToUpstreamKey maps CPA-facing model names to the gateway's current keys.
+// Only Qwen and DeepSeek are mapped: the model list and executor guard both
+// reject every other family, so an unknown name is left for the guard to catch.
 func cpaToUpstreamKey(cpaModel string) string {
 	switch cpaModel {
-	case "qoder-auto", "auto":
-		return "auto"
-	case "qwen3.8-max-preview", "qwen3.8-max", "qmodel_preview":
-		return "qmodel_preview"
-	case "qwen3.7-max", "qmodel_latest":
+	case "qmodel_38max", "qwen3.8-max", "qwen3.8-max-preview", "qmodel_preview":
+		return "qmodel_38max"
+	case "qfmodel", "qwen3.8-flash":
+		return "qfmodel"
+	case "qmodel_latest", "qwen3.7-max":
 		return "qmodel_latest"
-	case "qwen3.7-plus", "qmodel":
+	case "qmodel", "qwen3.7-plus":
 		return "qmodel"
-	case "qwen3.6-flash", "q36fmodel":
-		return "q36fmodel"
-	case "deepseek-v4-pro", "dmodel":
+	case "q37fmodel", "qwen3.7-flash":
+		return "q37fmodel"
+	case "dmodel", "deepseek-v4-pro":
 		return "dmodel"
-	case "deepseek-v4-flash", "dfmodel":
+	case "dfmodel", "deepseek-v4-flash", "deepseek-v4.1-flash":
 		return "dfmodel"
-	case "glm-5.2", "gm51model":
-		return "gm51model"
-	case "kimi-k2.7-code", "kmodel":
-		return "kmodel"
-	case "minimax-m2.7", "mmodel":
-		return "mmodel"
 	}
 	return cpaModel
 }
 
-// openAIMessage is one message in the OpenAI chat completion format.
+// openAIMessage accepts both OpenAI string content and provider-translated
+// content-block arrays (Anthropic /v1/messages reaches the plugin this way).
 type openAIMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
-// openAIRequest is the CPA-facing chat completion request.
+// openAIRequest is the CPA-facing chat completion request. System and
+// MaxTokens cover the Anthropic /v1/messages shape as well.
 type openAIRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Stream   bool            `json:"stream"`
+	Model     string          `json:"model"`
+	Messages  []openAIMessage `json:"messages"`
+	System    any             `json:"system"`
+	Stream    bool            `json:"stream"`
+	MaxTokens int64           `json:"max_tokens"`
 }
 
-// extractLatestUserPrompt returns the content of the last user message.
-func extractLatestUserPrompt(messages []openAIMessage) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			return messages[i].Content
+// normalizeContent flattens string content and text/tool_result/tool_use/image
+// blocks into plain text for the Qoder agent template.
+func normalizeContent(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case []any:
+		parts := make([]string, 0, len(x))
+		for _, item := range x {
+			if s := normalizeContent(item); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		switch typ, _ := x["type"].(string); typ {
+		case "text":
+			if s, ok := x["text"].(string); ok {
+				return s
+			}
+		case "tool_result":
+			if c, ok := x["content"]; ok {
+				return normalizeContent(c)
+			}
+			if s, ok := x["text"].(string); ok {
+				return s
+			}
+		case "tool_use":
+			name, _ := x["name"].(string)
+			input, _ := json.Marshal(x["input"])
+			return "[tool_use " + name + "] " + string(input)
+		case "image", "image_url":
+			return "[image]"
+		case "document":
+			return "[document]"
+		}
+		if s, ok := x["text"].(string); ok {
+			return s
+		}
+		if c, ok := x["content"]; ok {
+			return normalizeContent(c)
 		}
 	}
 	return ""
 }
 
+// textOnlyContent is normalizeContent without image placeholders, used for
+// chat_context.text.text so the model doesn't see a literal "[image]" next to
+// a real image attachment.
+func textOnlyContent(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case []any:
+		parts := make([]string, 0, len(x))
+		for _, item := range x {
+			if b, ok := item.(map[string]any); ok {
+				typ, _ := b["type"].(string)
+				if typ == "image" || typ == "image_url" {
+					continue
+				}
+			}
+			if s := normalizeContent(item); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		typ, _ := x["type"].(string)
+		if typ == "image" || typ == "image_url" {
+			return ""
+		}
+		return normalizeContent(x)
+	}
+	return ""
+}
+
+func containsImage(v any) bool {
+	switch x := v.(type) {
+	case []any:
+		for _, item := range x {
+			if containsImage(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		if typ, _ := x["type"].(string); typ == "image" || typ == "image_url" {
+			return true
+		}
+		if c, ok := x["content"]; ok && containsImage(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractLatestUserPrompt returns the text of the last user message, ignoring
+// image blocks (the image itself is carried in messages[]).
+func extractLatestUserPrompt(messages []openAIMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			if s := textOnlyContent(messages[i].Content); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func imageURLFromBlock(block map[string]any) string {
+	if iu, ok := block["image_url"].(map[string]any); ok {
+		if u, ok := iu["url"].(string); ok {
+			return strings.TrimSpace(u)
+		}
+	}
+	if u, ok := block["url"].(string); ok {
+		return strings.TrimSpace(u)
+	}
+	return ""
+}
+
+func imageBlockForQoder(url string) map[string]any {
+	return map[string]any{
+		"type":      "image_url",
+		"image_url": map[string]any{"url": url},
+	}
+}
+
+// messageContentForQoder converts one CPA message into the Qoder messages[]
+// content shape. Text blocks stay text; image blocks are uploaded and become
+// image_url blocks; tool blocks are flattened to text.
+func messageContentForQoder(v any, upload imageUploader) (any, error) {
+	switch x := v.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return x, nil
+	case []any:
+		blocks := make([]any, 0, len(x))
+		images := 0
+		addText := func(s string) {
+			if s != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": s})
+			}
+		}
+		addImage := func(u string) {
+			blocks = append(blocks, imageBlockForQoder(u))
+		}
+		for _, item := range x {
+			switch b := item.(type) {
+			case string:
+				addText(b)
+			case map[string]any:
+				typ, _ := b["type"].(string)
+				switch typ {
+				case "text":
+					if s, ok := b["text"].(string); ok {
+						addText(s)
+					}
+				case "image_url":
+					images++
+					if images > maxImagesPerRequest {
+						return nil, fmt.Errorf("too many images: max %d", maxImagesPerRequest)
+					}
+					u := imageURLFromBlock(b)
+					if u == "" {
+						return nil, fmt.Errorf("image_url block missing url")
+					}
+					if strings.HasPrefix(u, "data:") {
+						if upload == nil {
+							addText("[image]")
+							continue
+						}
+						mt, data, ok := parseImageDataURL(u)
+						if !ok {
+							return nil, fmt.Errorf("invalid image data URL")
+						}
+						if len(data) > maxImageBytes {
+							return nil, fmt.Errorf("image too large: %d bytes (max %d)", len(data), maxImageBytes)
+						}
+						uploaded, err := upload(data, mt)
+						if err != nil {
+							return nil, err
+						}
+						u = uploaded
+					} else if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+						return nil, fmt.Errorf("unsupported image url %q", u)
+					}
+					addImage(u)
+				case "image":
+					images++
+					if images > maxImagesPerRequest {
+						return nil, fmt.Errorf("too many images: max %d", maxImagesPerRequest)
+					}
+					source, _ := b["source"].(map[string]any)
+					srcType, _ := source["type"].(string)
+					switch srcType {
+					case "base64":
+						mt, _ := source["media_type"].(string)
+						dataStr, _ := source["data"].(string)
+						data, err := decodeBase64Image(dataStr)
+						if err != nil {
+							return nil, fmt.Errorf("image base64: %w", err)
+						}
+						if len(data) > maxImageBytes {
+							return nil, fmt.Errorf("image too large: %d bytes (max %d)", len(data), maxImageBytes)
+						}
+						if upload == nil {
+							addText("[image]")
+							continue
+						}
+						uploaded, err := upload(data, mt)
+						if err != nil {
+							return nil, err
+						}
+						addImage(uploaded)
+					case "url":
+						u, _ := source["url"].(string)
+						u = strings.TrimSpace(u)
+						if u == "" {
+							return nil, fmt.Errorf("image url source missing url")
+						}
+						if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+							return nil, fmt.Errorf("unsupported image url %q", u)
+						}
+						addImage(u)
+					default:
+						return nil, fmt.Errorf("unsupported image source type %q", srcType)
+					}
+				default:
+					addText(normalizeContent(b))
+				}
+			default:
+				addText(normalizeContent(item))
+			}
+		}
+		if len(blocks) == 0 {
+			return "", nil
+		}
+		hasImage := false
+		for _, b := range blocks {
+			if m, ok := b.(map[string]any); ok && m["type"] == "image_url" {
+				hasImage = true
+				break
+			}
+		}
+		if !hasImage {
+			parts := make([]string, 0, len(blocks))
+			for _, b := range blocks {
+				if m, ok := b.(map[string]any); ok && m["type"] == "text" {
+					if s, ok := m["text"].(string); ok && s != "" {
+						parts = append(parts, s)
+					}
+				}
+			}
+			return strings.Join(parts, "\n"), nil
+		}
+		return blocks, nil
+	case map[string]any:
+		return messageContentForQoder([]any{x}, upload)
+	}
+	return "", nil
+}
+
 // buildQoderBody renders the upstream agent_chat_generation body for one request.
 // modelKey is the upstream key (already mapped via cpaToUpstreamKey).
-func buildQoderBody(req *openAIRequest, modelKey, userType string) ([]byte, error) {
+func buildQoderBody(req *openAIRequest, modelKey, userType string, upload imageUploader) ([]byte, error) {
 	var base map[string]any
 	if err := json.Unmarshal(basepromptJSON, &base); err != nil {
 		return nil, fmt.Errorf("baseprompt decode: %w", err)
@@ -78,7 +336,17 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string) ([]byte, erro
 
 	prompt := extractLatestUserPrompt(req.Messages)
 	if prompt == "" {
-		return nil, fmt.Errorf("no user message in request")
+		hasImage := false
+		for _, m := range req.Messages {
+			if containsImage(m.Content) {
+				hasImage = true
+				break
+			}
+		}
+		if !hasImage {
+			return nil, fmt.Errorf("no user message in request")
+		}
+		prompt = "请描述这张图片。"
 	}
 
 	nid := uuid.NewString()
@@ -93,6 +361,11 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string) ([]byte, erro
 	// model_config
 	if mc, ok := base["model_config"].(map[string]any); ok {
 		mc["key"] = modelKey
+	}
+	if req.MaxTokens > 0 {
+		if params, ok := base["parameters"].(map[string]any); ok {
+			params["max_tokens"] = req.MaxTokens
+		}
 	}
 
 	// chat_context.text.text + chat_context.extra.originalContent.text
@@ -121,11 +394,22 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string) ([]byte, erro
 			}
 		}
 	}
-	// Append the actual conversation
+	if sys := normalizeContent(req.System); sys != "" {
+		systemMsgs = append(systemMsgs, map[string]any{"role": "system", "content": sys})
+	}
+	// Append the actual conversation. Text stays text; image blocks are
+	// uploaded and kept as messages[].image_url so the vision model sees them.
 	for _, m := range req.Messages {
+		content, err := messageContentForQoder(m.Content, upload)
+		if err != nil {
+			return nil, err
+		}
+		if content == "" {
+			continue
+		}
 		systemMsgs = append(systemMsgs, map[string]any{
 			"role":    m.Role,
-			"content": m.Content,
+			"content": content,
 		})
 	}
 	base["messages"] = systemMsgs
@@ -134,12 +418,16 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string) ([]byte, erro
 	if biz, ok := base["business"].(map[string]any); ok {
 		biz["id"] = uuid.NewString()
 		biz["begin_at"] = time.Now().UnixMilli()
-		if len(prompt) > 30 {
-			biz["name"] = prompt[:30]
-		} else {
-			biz["name"] = prompt
-		}
+		biz["name"] = truncateRunes(prompt, 30)
 	}
 
 	return json.Marshal(base)
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }

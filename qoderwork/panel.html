@@ -172,7 +172,7 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 <body>
 <div class="wrap">
   <h1>QoderWork 账号面板</h1>
-  <div class="sub">积分余额 · CN 每日签到（09:00/21:00）· 耗尽自动关</div>
+  <div class="sub">积分余额 · CN 每日签到（09:00/21:00）· 最近 20 条请求 · 耗尽自动关</div>
   <div id="authBox" class="card" style="display:none;margin-bottom:16px">
     <div style="margin-bottom:8px;color:var(--mut)">需要管理密钥（management key）才能访问账号数据。从 CPA 主面板嵌入时会自动获取，无需输入。错误密钥请勿连点，避免 IP 封禁。</div>
     <div style="display:flex;gap:8px">
@@ -196,6 +196,30 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
   <div id="grid" class="grid"><div class="loading">加载中…</div></div>
+  <div class="card" id="recentBox" style="margin-top:16px">
+    <div class="summary-hd">
+      <div class="summary-title">最近请求 · 最近 20 条</div>
+      <div class="summary-meta" id="recentMeta">加载中…</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table id="recentTable" style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="text-align:left;color:var(--mut)">
+            <th style="padding:6px 8px;font-weight:500">时间</th>
+            <th style="padding:6px 8px;font-weight:500">账号</th>
+            <th style="padding:6px 8px;font-weight:500">请求模型</th>
+            <th style="padding:6px 8px;font-weight:500;text-align:right">输入</th>
+            <th style="padding:6px 8px;font-weight:500;text-align:right">输出</th>
+            <th style="padding:6px 8px;font-weight:500;text-align:right">Credits</th>
+            <th style="padding:6px 8px;font-weight:500">状态</th>
+            <th style="padding:6px 8px;font-weight:500;text-align:right">耗时</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="recentEmpty" class="loading" style="display:none">暂无请求</div>
+  </div>
 </div>
 <div class="modal-mask" id="importModal" onclick="onImportMaskClick(event)">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
@@ -544,6 +568,55 @@ function renderSummary(accounts){
     `}
   `;
 }
+function fmtRecentTime(ts){
+  if(!ts) return "-";
+  try{return new Date(ts*1000).toLocaleString()}catch(e){return String(ts)}
+}
+function renderRecent(calls){
+  const tbody=document.querySelector("#recentTable tbody");
+  const empty=document.getElementById("recentEmpty");
+  const meta=document.getElementById("recentMeta");
+  if(!tbody) return;
+  if(!calls||!calls.length){
+    tbody.innerHTML="";
+    if(empty) empty.style.display="block";
+    if(meta) meta.textContent="暂无记录";
+    return;
+  }
+  if(empty) empty.style.display="none";
+  const known=calls.filter(c=>c.credits_known);
+  const totalCredits=known.reduce((s,c)=>s+(Number(c.credits)||0),0);
+  if(meta) meta.textContent=calls.length+" 条 · 合计 "+(known.length?totalCredits.toFixed(4):"-")+" credits · 进程重启清零";
+  tbody.innerHTML=calls.map(c=>{
+    const ok=!!c.ok;
+    const status=ok?'<span style="color:var(--ok)">成功</span>':'<span style="color:var(--err)" title="'+esc(c.error||"")+'">失败</span>';
+    const who=esc(c.nickname||c.auth_uid||c.auth_id||"-");
+    const model=esc(c.model||"-");
+    const up=(c.upstream_model&&c.upstream_model!==c.model)?(' title="upstream: '+esc(c.upstream_model)+'"'):'';
+    const ck=!!c.credits_known;
+    const cr=ck?Number(c.credits||0).toFixed(4):"-";
+    const crTitle=ck?(' title="original: '+Number(c.original_credits||0).toFixed(4)+' · billable: '+!!c.billable+'"'):'';
+    return '<tr>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap">'+esc(fmtRecentTime(c.ts))+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border)">'+who+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border)"'+up+'>'+model+(c.stream?' <span style="color:var(--mut)">stream</span>':'')+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">'+(c.prompt_tokens||0)+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">'+(c.completion_tokens||0)+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right"'+crTitle+'>'+cr+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border)">'+status+'</td>'
+      +'<td style="padding:6px 8px;border-bottom:1px solid var(--border);text-align:right">'+(c.duration_ms||0)+' ms</td>'
+      +'</tr>';
+  }).join("");
+}
+async function loadRecent(){
+  const meta=document.getElementById("recentMeta");
+  try{
+    const d=await api("/recent");
+    renderRecent((d&&d.calls)||[]);
+  }catch(e){
+    if(meta) meta.textContent=e.message||"加载失败";
+  }
+}
 async function api(path, opts={}){
   const k=getKey();
   if(!k){
@@ -632,6 +705,7 @@ async function load(force, btn){
     renderSummary(accounts);
     // Lazy-load credits for cards that don't have them yet.
     lazyLoadCredits(accounts);
+    loadRecent();
     if(force){
       const errN=accounts.filter(a=>a.error).length;
       const life=(d.lifecycle||[]).length;

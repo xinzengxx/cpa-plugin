@@ -64,6 +64,44 @@ func streamHeaders() http.Header {
 	return h
 }
 
+// outerStatus reads the gateway envelope's per-frame HTTP status. A 400 frame
+// carries a JSON error inside body; treating it as a normal chunk used to
+// produce an empty 200 completion (e.g. qmodel_preview access_denied).
+func outerStatus(outer map[string]any) int {
+	switch v := outer["statusCodeValue"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		i, _ := v.Int64()
+		return int(i)
+	}
+	return 0
+}
+
+// providerErrorMessage returns the upstream error text hidden in an SSE frame
+// body, or "" when the body is a normal OpenAI chunk.
+func providerErrorMessage(bodyStr string) string {
+	var inner map[string]any
+	if json.Unmarshal([]byte(bodyStr), &inner) != nil {
+		return ""
+	}
+	if code, _ := inner["code"].(string); strings.EqualFold(code, "provider_error") {
+		msg, _ := inner["message"].(string)
+		if details, _ := inner["details"].(string); details != "" {
+			return strings.TrimSpace(msg + ": " + details)
+		}
+		return strings.TrimSpace(msg)
+	}
+	if e, ok := inner["error"].(map[string]any); ok {
+		if msg, _ := e["message"].(string); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
 // pumpUpstreamStream reads the upstream SSE response in the background and
 // emits each cleaned chunk to the host stream. It closes the stream when done.
 // An emit failure (client disconnected → host closed the stream) aborts the
@@ -74,7 +112,7 @@ func streamHeaders() http.Header {
 // the outbound call and host transport policy applies. The host bridge emits
 // arbitrary 32KB chunks, so we adapt to io.Reader and keep the bufio.Scanner
 // SSE line framing unchanged.
-func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID string, started time.Time, authID string) {
+func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID, nickname string, started time.Time, authID string) {
 	// Always close the host stream exactly once on every exit path.
 	closed := false
 	closeOnce := func() {
@@ -92,6 +130,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, err.Error())
 		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
 		return
 	}
@@ -100,6 +139,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		// Drain the error body via the same bridge so the message is complete.
 		errPayload, _ := io.ReadAll(newHostStreamReader(stream))
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload))
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(errPayload), 300)))
 		if authUID != "" {
 			go reconcileByUID(authUID, statusCode, string(errPayload))
 		}
@@ -126,6 +166,24 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		if bodyStr == "[DONE]" {
 			break
 		}
+		if status := outerStatus(outer); status >= 400 {
+			msg := providerErrorMessage(bodyStr)
+			if msg == "" {
+				msg = bodyStr
+			}
+			detail := truncateRedacted(msg, 300)
+			publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, status, detail)
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, fmt.Sprintf("upstream %d: %s", status, detail))
+			streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", status, detail))
+			return
+		}
+		if msg := providerErrorMessage(bodyStr); msg != "" {
+			detail := truncateRedacted(msg, 300)
+			publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, detail)
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, "upstream provider_error: "+detail)
+			streamEmitError(streamID, "upstream provider_error: "+detail)
+			return
+		}
 		collector.feed(bodyStr)
 		cleaned := cleanChunkJSON(bodyStr)
 		if cleaned == "" {
@@ -137,6 +195,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		if err := streamEmit(streamID, []byte(cleaned)); err != nil {
 			// Client disconnected / host closed stream — abort; do not report success.
 			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error())
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, "stream_emit: "+err.Error())
 			return
 		}
 	}
@@ -144,10 +203,12 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	// surface it as an error frame and record the attempt as failed.
 	if err := scanner.Err(); err != nil {
 		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error())
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, err.Error())
 		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
 		return
 	}
 	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+	recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), false, "")
 	invalidateAccountCredits(authID, authUID)
 }
 
@@ -188,6 +249,16 @@ func collectUpstreamStreamQoder(encodedBody string, sa *storedAuth, modelKey str
 		bodyStr, ok := outer["body"].(string)
 		if !ok || bodyStr == "[DONE]" {
 			continue
+		}
+		if status := outerStatus(outer); status >= 400 {
+			msg := providerErrorMessage(bodyStr)
+			if msg == "" {
+				msg = bodyStr
+			}
+			return chunks, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(msg, 200))
+		}
+		if msg := providerErrorMessage(bodyStr); msg != "" {
+			return chunks, 0, fmt.Errorf("upstream provider_error: %s", truncateRedacted(msg, 200))
 		}
 		if collector != nil {
 			collector.feed(bodyStr)
@@ -440,6 +511,16 @@ func aggregateQoderSSE(r io.Reader, model string) ([]byte, error) {
 		}
 		if bodyStr == "[DONE]" {
 			break
+		}
+		if status := outerStatus(outer); status >= 400 {
+			msg := providerErrorMessage(bodyStr)
+			if msg == "" {
+				msg = bodyStr
+			}
+			return nil, fmt.Errorf("upstream %d: %s", status, truncateRedacted(msg, 200))
+		}
+		if msg := providerErrorMessage(bodyStr); msg != "" {
+			return nil, fmt.Errorf("upstream provider_error: %s", truncateRedacted(msg, 200))
 		}
 		// Re-emit the inner JSON as a standard "data:<json>\n" SSE frame so
 		// aggregateCompletion's parser can consume it unchanged.

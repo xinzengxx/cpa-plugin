@@ -117,6 +117,7 @@ func managementRegistration() managementRegistrationResponse {
 	return managementRegistrationResponse{
 		Routes: []managementRoute{
 			{Method: http.MethodGet, Path: base + "/accounts", Description: "List QoderWork accounts with credits, plan and check-in status."},
+			{Method: http.MethodGet, Path: base + "/recent", Description: "Recent chat calls (last 20): time, model, input/output tokens, status and duration."},
 			{Method: http.MethodPost, Path: base + "/refresh", Description: "Force refresh quota/cache for all accounts."},
 			{Method: http.MethodPost, Path: base + "/checkin", Description: "Manually check in one account (auth_index) or all."},
 			{Method: http.MethodPost, Path: base + "/checkin/config", Description: "Toggle auto check-in (enabled: true/false)."},
@@ -169,6 +170,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 	switch {
 	case req.Method == http.MethodGet && path == base+"/accounts":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, buildDashboardEx(false, false)))
+	case req.Method == http.MethodGet && path == base+"/recent":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, recentJSON()))
 	case req.Method == http.MethodPost && path == base+"/refresh":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, buildDashboardEx(true, true)))
 	case req.Method == http.MethodPost && path == base+"/checkin":

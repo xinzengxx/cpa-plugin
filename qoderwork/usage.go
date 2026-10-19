@@ -221,10 +221,73 @@ func usageDetailFromCompletion(payload []byte) usage.Detail {
 	return usageDetailFromMap(m)
 }
 
+// qoderCredits is the per-call billing snapshot Qoder returns in the usage
+// object. Credits is the discounted charge; OriginalCredits is the list price.
+type qoderCredits struct {
+	Credits         float64
+	OriginalCredits float64
+	Billable        bool
+	Known           bool
+}
+
+func creditsFromUsageMap(m map[string]any) qoderCredits {
+	if len(m) == 0 {
+		return qoderCredits{}
+	}
+	num := func(keys ...string) (float64, bool) {
+		for _, k := range keys {
+			v, ok := m[k]
+			if !ok {
+				continue
+			}
+			switch n := v.(type) {
+			case float64:
+				return n, true
+			case float32:
+				return float64(n), true
+			case int:
+				return float64(n), true
+			case int64:
+				return float64(n), true
+			case json.Number:
+				if f, err := n.Float64(); err == nil {
+					return f, true
+				}
+			}
+		}
+		return 0, false
+	}
+	credits, okC := num("credits", "credit")
+	original, okO := num("original_credits", "original_credit")
+	billable, _ := m["billable"].(bool)
+	return qoderCredits{
+		Credits:         credits,
+		OriginalCredits: original,
+		Billable:        billable,
+		Known:           okC || okO,
+	}
+}
+
+func creditsFromCompletion(payload []byte) qoderCredits {
+	var obj map[string]any
+	if json.Unmarshal(payload, &obj) != nil {
+		return qoderCredits{}
+	}
+	m, _ := obj["usage"].(map[string]any)
+	return creditsFromUsageMap(m)
+}
+
 // sseUsageCollector scans upstream SSE chunks and keeps the last "usage"
 // object seen (QoderWork emits it on the terminal chunk).
 type sseUsageCollector struct {
 	last map[string]any
+}
+
+func (c *sseUsageCollector) credits() qoderCredits {
+	if c == nil {
+		return qoderCredits{}
+	}
+	return creditsFromUsageMap(c.last)
 }
 
 func (c *sseUsageCollector) feed(rawJSON string) {

@@ -9,7 +9,9 @@
 | **双登录方式** | ① OAuth 设备授权（PKCE，浏览器授权，dt- 30 天 + drt- 1 年自动旋转）② PAT 导入（pt-，长期有效兜底）——两家族可共存于同一 auth 文件 |
 | **登录自动领包** | OAuth 登录成功后自动判断并领取一次性 Pro 升级包（eligibility → claim） |
 | **COSY 推理** | RSA 包 AES 会话密钥 + MD5 请求签名，对接 gateway.qoder.com.cn SSE 流式 |
-| **动态模型** | COSY 拉取 `/algo/api/v2/model/list`（chat scene），10 静态模型兜底 |
+| **图片输入** | 支持 OpenAI `image_url` 和 Anthropic `image` 块；自动上传到 Qoder 的 `/algo/api/v2/image/upload`，再以 `messages[].image_url` 发送。png/jpeg/gif/webp，单图 ≤10MB，最多 5 张 |
+| **动态模型** | COSY 拉取 `/algo/api/v2/model/list`（chat scene），14 静态模型兜底；只暴露 Qwen / DeepSeek 系列 |
+| **最近请求** | 面板显示最近 20 条调用的时间、模型、输入/输出 token、状态、耗时（进程重启清零） |
 | **每日签到** | 面板手动签到（单账号/批量）+ 09:00/21:00 定时自动签到，签到后返回最新积分快照 |
 | **积分面板** | 账号卡片：昵称/积分/计划/签到状态/操作（签到/刷新/选用） |
 | **token 保活** | 22:00 定时刷新；按 token 前缀路由（drt- → deviceToken/refresh，jrt- → jobToken/refresh），PAT 永不劫持 OAuth 刷新 |
@@ -88,7 +90,31 @@ auth 文件字段（可共存）：
 
 ## 模型
 
-10 个静态模型（`qmodel_preview` 等）+ COSY 动态拉取。CPA 侧别名示例：`qoder/qwen3.8-max` → `qmodel_preview`。
+本插件只暴露 **Qwen + DeepSeek** 两个系列；GLM 走 `workbuddy-cpa`，Auto/GLM/Kimi/MiniMax 不会出现在 qoderwork 的模型列表里，executor 也会拒绝非 Qwen/DeepSeek 请求。
+
+| 系列 | 上游 key | 客户端兼容名 |
+|---|---|---|
+| Qwen | `qmodel_38max` | `qwen3.8-max` / `qwen3.8-max-preview` / `qmodel_preview` |
+| Qwen | `qfmodel` | `qwen3.8-flash` |
+| Qwen | `qmodel_latest` | `qwen3.7-max` |
+| Qwen | `qmodel` | `qwen3.7-plus` |
+| Qwen | `q37fmodel` | `qwen3.7-flash` |
+| DeepSeek | `dmodel` | `deepseek-v4-pro` |
+| DeepSeek | `dfmodel` | `deepseek-v4-flash` / `deepseek-v4.1-flash` |
+
+模型清单由 COSY 动态拉取，静态表仅作冷启动兜底。
+
+## 图片输入
+
+`/v1/chat/completions` 和 `/v1/messages` 都支持图片：
+
+- OpenAI：`{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}`
+- Anthropic：`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}`
+- `http(s)` 图片 URL 直接透传；`data:` URL 会先上传到 Qoder，拿到 OSS URL 后放进 `messages[].image_url`。
+- 支持 `png` / `jpeg` / `gif` / `webp`，单图 ≤10MB，最多 5 张。
+- 图片上传签名与官方 CN 客户端一致：`PUT /algo/api/v2/image/upload?request_id=...`，COSY 签名使用 multipart body 的**字节长度**。
+
+已实测：64x64 红色 PNG 经 `deepseek-v4.1-flash` 和 `qwen3.8-max` 均返回“红色”，OpenAI Chat 与 Anthropic Messages 两条入口都通过。
 
 ## 参考文档
 

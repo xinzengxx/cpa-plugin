@@ -669,6 +669,12 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
+	if !isAllowedUpstreamModel(upstreamModel) {
+		msg := fmt.Sprintf("model_not_supported: qoderwork serves Qwen/DeepSeek only (got %q)", req.Model)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, msg)
+		return nil, fmt.Errorf("%s", msg)
+	}
 	// Build the QoderWork agent_chat_generation body from the OpenAI request,
 	// then QoderEncoding-encode it. The template embeds a 10657-token system
 	// prompt that the server requires for normal behaviour (KNOWLEDGE §5.2).
@@ -677,7 +683,10 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "payload parse: "+err.Error())
 		return nil, fmt.Errorf("payload parse: %w", err)
 	}
-	body, err := buildQoderBody(qwReq, upstreamModel, uiUserType(nil))
+	uploader := func(data []byte, mediaType string) (string, error) {
+		return uploadQoderImage(sa, data, mediaType)
+	}
+	body, err := buildQoderBody(qwReq, upstreamModel, uiUserType(nil), uploader)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "body build: "+err.Error())
 		return nil, fmt.Errorf("body build: %w", err)
@@ -696,6 +705,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, err.Error())
 		return nil, fmt.Errorf("http_error: %w", err)
 	}
 	defer stream.Close()
@@ -703,15 +713,19 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if statusCode >= 400 {
 		payload, _ := io.ReadAll(reader)
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 300)))
 		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
 		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
 	}
 	completion, err := aggregateQoderSSE(reader, req.Model)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, err.Error())
 		return nil, err
 	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
+	detail := usageDetailFromCompletion(completion)
+	publishUsage(req.Model, upstreamModel, authUID, started, detail, false, 0, "")
+	recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, detail, creditsFromCompletion(completion), false, "")
 	invalidateAccountCredits(req.AuthID, authUID)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
@@ -748,6 +762,16 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
+	if !isAllowedUpstreamModel(upstreamModel) {
+		msg := fmt.Sprintf("model_not_supported: qoderwork serves Qwen/DeepSeek only (got %q)", req.Model)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, msg)
+		if req.StreamID != "" {
+			streamEmitError(req.StreamID, msg)
+			streamClose(req.StreamID)
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
 
 	// Build the QoderWork body (template-based) and QoderEncoding-encode.
 	bodyRaw := req.Payload
@@ -759,7 +783,10 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "payload parse: "+err.Error())
 		return nil, fmt.Errorf("payload parse: %w", err)
 	}
-	body, err := buildQoderBody(qwReq, upstreamModel, uiUserType(nil))
+	uploader := func(data []byte, mediaType string) (string, error) {
+		return uploadQoderImage(sa, data, mediaType)
+	}
+	body, err := buildQoderBody(qwReq, upstreamModel, uiUserType(nil), uploader)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "body build: "+err.Error())
 		return nil, fmt.Errorf("body build: %w", err)
@@ -775,9 +802,11 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		chunks, statusCode, errCollect := collectUpstreamStreamQoder(encodedBody, sa, upstreamModel, sseFramed, collector)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
+			recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, collector.detail(), collector.credits(), true, errCollect.Error())
 			return nil, errCollect
 		}
 		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, collector.detail(), collector.credits(), false, "")
 		invalidateAccountCredits(req.AuthID, authUID)
 		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
 	}
@@ -791,17 +820,19 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointChat, strings.NewReader(encodedBody))
 	if err != nil {
 		cancel()
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, err.Error())
 		streamEmitError(req.StreamID, err.Error())
 		streamClose(req.StreamID)
 		return okEnvelope(streamResponse{Headers: headers})
 	}
 	if err := applyCosyHeaders(httpReq, sa, encodedBody, endpointChat, upstreamModel, true); err != nil {
 		cancel()
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, "cosy: "+err.Error())
 		streamEmitError(req.StreamID, "cosy: "+err.Error())
 		streamClose(req.StreamID)
 		return okEnvelope(streamResponse{Headers: headers})
 	}
-	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID)
+	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, sa.Account.Nickname, started, req.AuthID)
 	return okEnvelope(streamResponse{Headers: headers})
 }
 

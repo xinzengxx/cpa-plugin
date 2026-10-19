@@ -15,23 +15,109 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// wbModels is the static fallback model list for QoderWork CN. Keys mirror
-// /root/qoderwork/models_list.json (KNOWLEDGE §6.2). Aliases use the qoder/
-// prefix in AuthAttributes; bare IDs work too. Dynamic refresh via
-// /algo/api/v2/model/list replaces this at runtime when an account is present.
+// wbModels is the static fallback model list for QoderWork CN, refreshed from
+// the live /algo/api/v2/model/list response (2026-10-20). Dynamic discovery
+// still wins at runtime; this table keeps a cold start usable.
 func wbModels() []pluginapi.ModelInfo {
-	return []pluginapi.ModelInfo{
-		{ID: "auto", Name: "Auto", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel_preview", Name: "Qwen3.8-Max-Preview", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel_latest", Name: "Qwen3.7-Max", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel", Name: "Qwen3.7-Plus", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "q36fmodel", Name: "Qwen3.6-Flash", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "dmodel", Name: "DeepSeek-V4-Pro", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "dfmodel", Name: "DeepSeek-V4-Flash", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "gm51model", Name: "GLM-5.2", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "kmodel", Name: "Kimi-K2.7-Code", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "mmodel", Name: "MiniMax-M2.7", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
+	specs := []struct {
+		id, name string
+		ctx      int64
+	}{
+		{"auto", "Auto", 200000},
+		{"qmodel_38max", "Qwen3.8-Max", 180000},
+		{"qfmodel", "Qwen3.8-Flash", 180000},
+		{"qmodel_latest", "Qwen3.7-Max", 180000},
+		{"qmodel", "Qwen3.7-Plus", 180000},
+		{"q37fmodel", "Qwen3.7-Flash", 180000},
+		{"dmodel", "DeepSeek-V4-Pro", 96000},
+		{"dfmodel", "DeepSeek-Flash", 180000},
+		{"gmodel", "GLM-5.3", 180000},
+		{"gfmodel", "GLM-5.3-Flash", 1000000},
+		{"gm51model", "GLM-5.2", 180000},
+		{"kmodel_latest", "Kimi-K3", 180000},
+		{"kmodel", "Kimi-K2.8-Preview", 180000},
+		{"mmodel", "MiniMax-M3.1-Flash", 180000},
 	}
+	out := make([]pluginapi.ModelInfo, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, pluginapi.ModelInfo{
+			ID:                         s.id,
+			Name:                       s.name,
+			ContextLength:              s.ctx,
+			MaxCompletionTokens:        8192,
+			OwnedBy:                    providerName,
+			SupportedGenerationMethods: []string{"chat"},
+		})
+	}
+	return out
+}
+
+// QoderWork is restricted to the Qwen and DeepSeek families. Everything else
+// (Auto/GLM/Kimi/MiniMax) is omitted so CPA cannot route it here.
+func allowedQoderModel(m pluginapi.ModelInfo) bool {
+	id := strings.ToLower(strings.TrimSpace(m.ID))
+	name := strings.ToLower(strings.TrimSpace(m.Name))
+	if strings.Contains(name, "qwen") || strings.Contains(name, "deepseek") {
+		return true
+	}
+	switch id {
+	case "qmodel_38max", "qfmodel", "qmodel_latest", "qmodel", "q37fmodel", "dmodel", "dfmodel":
+		return true
+	}
+	return false
+}
+
+func filterAllowedModels(models []pluginapi.ModelInfo) []pluginapi.ModelInfo {
+	out := make([]pluginapi.ModelInfo, 0, len(models))
+	for _, m := range models {
+		if allowedQoderModel(m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// withClientModelAliases keeps the client-facing Qwen/DeepSeek names working
+// after the family restriction. cpaToUpstreamKey maps these IDs to the real
+// gateway keys; they are separate entries so CPA has something to route to.
+func withClientModelAliases(models []pluginapi.ModelInfo) []pluginapi.ModelInfo {
+	have := make(map[string]bool, len(models))
+	for _, m := range models {
+		have[m.ID] = true
+	}
+	add := func(id, name string, ctx int64) {
+		if have[id] {
+			return
+		}
+		have[id] = true
+		models = append(models, pluginapi.ModelInfo{
+			ID:                         id,
+			Name:                       name,
+			ContextLength:              ctx,
+			MaxCompletionTokens:        8192,
+			OwnedBy:                    providerName,
+			SupportedGenerationMethods: []string{"chat"},
+		})
+	}
+	add("qwen3.8-max", "Qwen3.8-Max", 180000)
+	add("qwen3.8-flash", "Qwen3.8-Flash", 180000)
+	add("qwen3.7-max", "Qwen3.7-Max", 180000)
+	add("qwen3.7-plus", "Qwen3.7-Plus", 180000)
+	add("qwen3.7-flash", "Qwen3.7-Flash", 180000)
+	add("deepseek-v4-pro", "DeepSeek-V4-Pro", 96000)
+	add("deepseek-v4-flash", "DeepSeek-V4-Flash", 180000)
+	add("deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", 180000)
+	return models
+}
+
+// isAllowedUpstreamModel is the executor-side guard: even if the host hands us
+// a stale model id, refuse to send anything outside Qwen/DeepSeek upstream.
+func isAllowedUpstreamModel(model string) bool {
+	switch model {
+	case "qmodel_38max", "qfmodel", "qmodel_latest", "qmodel", "q37fmodel", "dmodel", "dfmodel":
+		return true
+	}
+	return false
 }
 
 func cachedDynamicModels() ([]pluginapi.ModelInfo, bool) {
@@ -321,7 +407,8 @@ func handleModelStatic(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	cacheModelAliases(req.Host)
-	models := fetchDynamicModels()
+	models := filterAllowedModels(fetchDynamicModels())
+	models = withClientModelAliases(models)
 	models = filterExcludedModels(models, req.Host)
 	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: models})
 }
@@ -336,7 +423,8 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	// req.AuthProvider back would silently drop the model list whenever the
 	// auth file carries a non-canonical provider string.
 	cacheModelAliases(req.Host)
-	models := fetchDynamicModelsFromStorage(req.StorageJSON)
+	models := filterAllowedModels(fetchDynamicModelsFromStorage(req.StorageJSON))
+	models = withClientModelAliases(models)
 	models = filterExcludedModels(models, req.Host)
 	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: models})
 }

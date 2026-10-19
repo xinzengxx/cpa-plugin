@@ -172,6 +172,13 @@ func (s *cosySession) buildBearer(body, rawURL string) (payloadB64, date, bearer
 	if strings.HasPrefix(pathSig, "/algo") {
 		pathSig = pathSig[len("/algo"):]
 	}
+	return s.buildBearerFor(body, pathSig)
+}
+
+// buildBearerFor signs an explicit body and path. Image upload signs the
+// multipart body's byte length (not its contents), matching the CN client's
+// prepareRequest(..., "auth", String(body.length), ...) call.
+func (s *cosySession) buildBearerFor(body, pathSig string) (payloadB64, date, bearer string, err error) {
 	payload := map[string]string{
 		"cosyVersion": "0.1.43",
 		"ideVersion":  "",
