@@ -29,15 +29,7 @@ plugins:
       # checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"..."}'
 ```
 
-若 CPA 中已有其他 provider 暴露同名 `claude-opus-5-5`（例如 notion），`priority` 更高者优先；也可用 `oauth-model-alias` 增加唯一别名：
-
-```yaml
-oauth-model-alias:
-  qoder:
-    - name: "claude-opus-5-5"
-      alias: "qoder-opus"
-      fork: true
-```
+若 CPA 中已有其他 provider 暴露同名 `claude-opus-5-5`（例如 notion），把本插件的 `priority` 调高即可稳定路由到 qoder。
 
 ## 登录
 

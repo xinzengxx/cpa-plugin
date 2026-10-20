@@ -44,7 +44,7 @@ func recordRecentCall(authID, authUID, nickname, model, upstreamModel string, st
 		if errMsg == "" {
 			errMsg = "request failed"
 		}
-		errText = truncate(redactSecrets(errMsg), 300)
+		errText = truncate(redactSecrets(errMsg), upstreamErrorLimit)
 	}
 	duration := int64(0)
 	if !started.IsZero() {

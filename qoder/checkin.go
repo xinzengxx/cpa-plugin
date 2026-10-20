@@ -363,7 +363,7 @@ func checkinLockFor(authIndex string) *sync.Mutex {
 // checkProUpgradeEligibility returns whether the account can still claim the
 // one-time Pro Upgrade pack (+1800).
 func checkProUpgradeEligibility(sa *storedAuth) (bool, error) {
-	req, err := http.NewRequest(http.MethodGet, upstreamBase+"/sash/api/v1/me/pro-upgrade/eligibility", nil)
+	req, err := http.NewRequest(http.MethodGet, endpointProUpgradeEligibility, nil)
 	if err != nil {
 		return false, err
 	}

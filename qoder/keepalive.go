@@ -71,36 +71,50 @@ func isSessionDeadError(msg string) bool {
 //   - legacy PAT accounts: POST /api/v1/jobToken/refresh with jrt-, falling
 //     back to jobToken/exchange with the PAT when the jrt- has expired.
 //
-// Returns the decoded data + raw body + status (raw needed for error
-// classification — doRawJSON collapses 4xx bodies into a generic error and
-// drops the business code, e.g. TOKEN_EXPIRE).
+// Returns the decoded data + raw body + status. The raw body is preserved on
+// HTTP errors so callers can classify business codes like TOKEN_EXPIRE.
 func refreshCall(sa *storedAuth) (json.RawMessage, []byte, int, error) {
 	// Device family (drt-): use the device flow's own refresh endpoint.
 	// Routing is by token prefix, not PersonalToken presence — a PAT may
 	// coexist as fallback and must not hijack OAuth refreshes.
 	if strings.HasPrefix(sa.Auth.RefreshToken, "drt-") {
 		body, _ := json.Marshal(map[string]string{"refresh_token": sa.Auth.RefreshToken})
-		data, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, upstreamBase+"/api/v1/deviceToken/refresh", nil, bytes.NewReader(body))
+		data, raw, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointDeviceTokenRefresh, nil, bytes.NewReader(body))
 		if err == nil {
-			return data, data, status, nil
+			return data, raw, status, nil
 		}
-		return nil, nil, status, err
+		return nil, raw, status, err
 	}
 	// Legacy PAT family: try jrt- refresh first.
 	body, _ := json.Marshal(map[string]string{"refresh_token": sa.Auth.RefreshToken})
-	data, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenRefresh, nil, bytes.NewReader(body))
+	data, raw, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenRefresh, nil, bytes.NewReader(body))
 	if err == nil {
-		return data, data, status, nil
+		return data, raw, status, nil
 	}
-	// Fallback: PAT re-exchange (only when a PAT is actually present).
+	// Fallback: PAT re-exchange (only when a PAT is actually present). If the
+	// fallback also fails, report the jrt- failure: a TOKEN_EXPIRE there is
+	// what identifies a dead session.
 	if sa.Auth.PersonalToken != "" {
 		patBody, _ := json.Marshal(map[string]string{"personal_token": sa.Auth.PersonalToken})
-		data2, status2, err2 := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenExchange, nil, bytes.NewReader(patBody))
+		data2, raw2, status2, err2 := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenExchange, nil, bytes.NewReader(patBody))
 		if err2 == nil {
-			return data2, data2, status2, nil
+			return data2, raw2, status2, nil
 		}
 	}
-	return nil, nil, status, err
+	return nil, raw, status, err
+}
+
+// refreshFailureText returns the text used to classify a refresh failure:
+// the raw upstream body when available (refreshCall now keeps it on HTTP
+// errors), else the error string (doRawJSON embeds the body there too).
+func refreshFailureText(raw []byte, err error) string {
+	if strings.TrimSpace(string(raw)) != "" {
+		return string(raw)
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // refreshOneAuth refreshes the access token for a single qoder auth and
@@ -116,8 +130,11 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 
 	data, raw, status, err := refreshCall(sa)
 	if err != nil {
-		msg := string(raw)
-		if status == 401 && isSessionDeadError(msg) {
+		// refreshCall keeps the raw body on HTTP errors; fall back to the
+		// error text (doRawJSON embeds the upstream body) so a revoked
+		// drt-/jrt- is still classified as a dead session.
+		msg := refreshFailureText(raw, err)
+		if status == http.StatusUnauthorized && isSessionDeadError(msg) {
 			// Upstream killed the offline session: refresh token is dead and
 			// every API call for this account will 401. Flag disabled so the
 			// scheduler stops routing traffic to it until manual re-login.
@@ -126,7 +143,7 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 			}
 			return "session-dead", fmt.Errorf("session dead (TOKEN_EXPIRE): flagged disabled")
 		}
-		return "failed", fmt.Errorf("refresh rejected (HTTP %d): %s", status, truncateRedacted(err.Error(), 120))
+		return "failed", fmt.Errorf("refresh rejected (HTTP %d): %s", status, truncateRedacted(err.Error(), upstreamErrorLimit))
 	}
 
 	// Parse both response shapes: jobToken refresh returns {"token":...},
@@ -143,7 +160,7 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 		expiry = deviceExpiryUnix(&dt)
 	}
 	if tok.Token == "" {
-		return "failed", fmt.Errorf("refresh_failed: no token in response (raw=%s)", truncateRedacted(string(data), 200))
+		return "failed", fmt.Errorf("refresh_failed: no token in response (raw=%s)", truncateRedacted(string(data), upstreamErrorLimit))
 	}
 	sa.Auth.AccessToken = tok.Token
 	if tok.RefreshToken != "" {
@@ -283,7 +300,7 @@ func runTokenKeepalive() *keepaliveSummary {
 			status, err := refreshOneAuth(f.AuthIndex, f.ID)
 			row.Status = status
 			if err != nil {
-				row.Detail = truncateRedacted(err.Error(), 200)
+				row.Detail = truncateRedacted(err.Error(), upstreamErrorLimit)
 			}
 			mu.Lock()
 			sum.Results = append(sum.Results, row)
@@ -329,7 +346,7 @@ func handleKeepaliveNow(req pluginapi.ManagementRequest) map[string]any {
 	row := keepaliveRow{AuthIndex: authIndex, Nickname: sa.Account.Nickname, Region: "global"}
 	row.Status, err = refreshOneAuth(authIndex, "")
 	if err != nil {
-		row.Detail = truncateRedacted(err.Error(), 200)
+		row.Detail = truncateRedacted(err.Error(), upstreamErrorLimit)
 	}
 	return map[string]any{"when": time.Now(), "results": []keepaliveRow{row}}
 }

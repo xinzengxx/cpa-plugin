@@ -803,8 +803,10 @@ async function selectAuth(idx, btn){
     const who=d.nickname||idx;
     const region="Global";
     toast("已选用","ok",who+" · "+region);
-    // Re-render from local state for instant feedback, then soft reload
-    (lastAccounts||[]).forEach(a=>{a.selected=(a.auth_index===activeAuthId);});
+    // Re-render from local state for instant feedback, then soft reload.
+    // active_auth is the credential ID, while cards are keyed by auth_index —
+    // compare both so the 使用中 badge survives the optimistic re-render.
+    (lastAccounts||[]).forEach(a=>{a.selected=(a.auth_index===activeAuthId||a.auth_id===activeAuthId);});
     const g=document.getElementById("grid");
     if(g){
       g.innerHTML=accountsForFilter(lastAccounts).map(card).join("");

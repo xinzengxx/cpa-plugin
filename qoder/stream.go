@@ -49,7 +49,7 @@ func streamEmitError(streamID, message string) {
 	_, _ = hostCall(pluginabi.MethodHostStreamEmit, streamErrorWire(streamID, message))
 }
 
-var streamCloseOnce sync.Map // streamID -> sync.Once
+var streamCloseOnce sync.Map // streamID -> *sync.Once
 
 func streamClose(streamID string) {
 	if streamID == "" {
@@ -60,6 +60,9 @@ func streamClose(streamID string) {
 	once.Do(func() {
 		body, _ := json.Marshal(map[string]any{"stream_id": streamID})
 		_, _ = hostCall(pluginabi.MethodHostStreamClose, body)
+		// Bound the map: a closed stream is terminal and never re-registered.
+		// The host close is idempotent, so a racing duplicate is harmless.
+		streamCloseOnce.Delete(streamID)
 	})
 }
 
@@ -428,13 +431,21 @@ func detailText(v any) string {
 // upstreamFailureText renders the client-facing and recorded detail for a
 // non-2xx upstream response. When a 401/403 retry could not refresh the
 // credential, the refresh failure is appended to the upstream error so neither
-// part is swallowed.
+// part is swallowed. The combined text stays within upstreamErrorLimit while
+// keeping the refresh suffix visible even when the upstream body is long.
 func upstreamFailureText(status int, body []byte, bodyLimit int, refreshErr error) string {
-	msg := fmt.Sprintf("upstream %d: %s", status, truncateRedacted(string(body), bodyLimit))
-	if refreshErr != nil {
-		msg += fmt.Sprintf(" (refresh failed: %v)", refreshErr)
+	text := fmt.Sprintf("upstream %d: %s", status, truncateRedacted(string(body), bodyLimit))
+	if refreshErr == nil {
+		return text
 	}
-	return msg
+	suffix := fmt.Sprintf(" (refresh failed: %v)", refreshErr)
+	if keep := upstreamErrorLimit - len(suffix); len(text) > keep {
+		if keep < 0 {
+			keep = 0
+		}
+		text = truncate(text, keep)
+	}
+	return text + suffix
 }
 
 func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *storedAuth, body []byte, requestID, sessionID, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID, nickname string, started time.Time, authID string) {
@@ -480,7 +491,7 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 		rejectedBody, _ = io.ReadAll(newHostStreamReader(stream))
 		stream.Close()
 		if attempt == 0 {
-			if refreshErr = refreshForRetry(sa); refreshErr == nil {
+			if refreshErr = refreshForRetry(authID, sa); refreshErr == nil {
 				continue
 			}
 		}
@@ -493,13 +504,13 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 		if len(raw) == 0 {
 			raw, _ = io.ReadAll(reader)
 		}
-		detail := upstreamFailureText(status, raw, 300, refreshErr)
+		detail := upstreamFailureText(status, raw, upstreamErrorLimit, refreshErr)
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, status, detail)
 		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, detail)
 		if authUID != "" {
 			go reconcileByUID(authUID, status, string(raw))
 		}
-		streamEmitError(streamID, upstreamFailureText(status, raw, 200, refreshErr))
+		streamEmitError(streamID, upstreamFailureText(status, raw, upstreamErrorLimit, refreshErr))
 		return
 	}
 	collector := &sseUsageCollector{}
@@ -518,7 +529,7 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 			break
 		}
 		if msg := streamErrorMessage(payload); msg != "" {
-			detail := truncateRedacted(msg, 300)
+			detail := truncateRedacted(msg, upstreamErrorLimit)
 			publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, detail)
 			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, "upstream error: "+detail)
 			streamEmitError(streamID, "upstream error: "+detail)
@@ -544,7 +555,7 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 		streamEmitError(streamID, "upstream stream read error: "+err.Error())
 		return
 	}
-	if !collector.hasOutput && collector.detail().TotalTokens == 0 {
+	if !collector.hasOutput {
 		const msg = "upstream returned an empty completion"
 		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, msg)
 		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, msg)
@@ -557,12 +568,12 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 }
 
 // collectUpstreamStream retries the synchronous stream collection exactly once
-// on 401/403 after refreshing the credential in memory. A failed refresh
-// surfaces the original upstream error plus the refresh failure.
-func collectUpstreamStream(sa *storedAuth, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+// on 401/403 after refreshing the credential. A failed refresh surfaces the
+// original upstream error plus the refresh failure.
+func collectUpstreamStream(sa *storedAuth, authID, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	chunks, status, err := collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
 	if err != nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
-		if rerr := refreshForRetry(sa); rerr != nil {
+		if rerr := refreshForRetry(authID, sa); rerr != nil {
 			return nil, status, fmt.Errorf("%w (refresh failed: %v)", err, rerr)
 		}
 		return collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
@@ -583,10 +594,14 @@ func collectUpstreamStreamOnce(sa *storedAuth, requestedModel string, body []byt
 	reader := newHostStreamReader(stream)
 	if status >= 400 {
 		raw, _ := io.ReadAll(reader)
-		return nil, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(string(raw), 200))
+		return nil, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(string(raw), upstreamErrorLimit))
+	}
+	// Always drive one collector: it is the single definition of "output"
+	// (content, reasoning_content, or tool_calls). Usage alone is not output.
+	if collector == nil {
+		collector = &sseUsageCollector{}
 	}
 	chunks := make([]pluginapi.ExecutorStreamChunk, 0, 64)
-	hasOutput := false
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -599,16 +614,9 @@ func collectUpstreamStreamOnce(sa *storedAuth, requestedModel string, body []byt
 			continue
 		}
 		if msg := streamErrorMessage(payload); msg != "" {
-			return chunks, 0, fmt.Errorf("upstream error: %s", truncateRedacted(msg, 200))
+			return chunks, 0, fmt.Errorf("upstream error: %s", truncateRedacted(msg, upstreamErrorLimit))
 		}
-		if collector != nil {
-			collector.feed(payload)
-			if collector.hasOutput {
-				hasOutput = true
-			}
-		} else if chunkHasOutput(payload) {
-			hasOutput = true
-		}
+		collector.feed(payload)
 		cleaned := cleanChunkJSON(payload)
 		if cleaned == "" {
 			continue
@@ -621,27 +629,8 @@ func collectUpstreamStreamOnce(sa *storedAuth, requestedModel string, body []byt
 	if err := scanner.Err(); err != nil {
 		return chunks, 0, fmt.Errorf("upstream stream read error: %w", err)
 	}
-	if !hasOutput {
+	if !collector.hasOutput {
 		return chunks, 0, fmt.Errorf("upstream returned an empty completion")
 	}
 	return chunks, 0, nil
-}
-
-func chunkHasOutput(payload string) bool {
-	var chunk map[string]any
-	if json.Unmarshal([]byte(payload), &chunk) != nil {
-		return false
-	}
-	choices, _ := chunk["choices"].([]any)
-	for _, raw := range choices {
-		choice, _ := raw.(map[string]any)
-		delta, _ := choice["delta"].(map[string]any)
-		if s, _ := delta["content"].(string); s != "" {
-			return true
-		}
-		if tc, _ := delta["tool_calls"].([]any); len(tc) > 0 {
-			return true
-		}
-	}
-	return false
 }

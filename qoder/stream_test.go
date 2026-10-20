@@ -32,7 +32,7 @@ func TestCollectUpstreamStreamPreservesToolCallsAndUsage(t *testing.T) {
 	}
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
 	collector := &sseUsageCollector{}
-	chunks, status, err := collectUpstreamStream(sa, clientModelID, body, rid, sid, false, collector)
+	chunks, status, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, collector)
 	if err != nil {
 		t.Fatalf("collect: %v (status %d)", err, status)
 	}
@@ -72,7 +72,7 @@ func TestCollectUpstreamStreamSSEFraming(t *testing.T) {
 
 	body, rid, sid, _ := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
-	chunks, _, err := collectUpstreamStream(sa, clientModelID, body, rid, sid, true, nil)
+	chunks, _, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, true, nil)
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -145,7 +145,51 @@ func TestCollectUpstreamStreamEmptyGuard(t *testing.T) {
 
 	body, rid, sid, _ := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
-	if _, _, err := collectUpstreamStream(sa, clientModelID, body, rid, sid, false, &sseUsageCollector{}); err == nil {
+	if _, _, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, &sseUsageCollector{}); err == nil {
 		t.Fatal("empty upstream stream must return an error, not an empty 200")
+	}
+}
+
+// TestCollectUpstreamStreamUsageOnlyIsEmpty pins the empty guard: token counts
+// without content/tool_calls/reasoning are not model output.
+func TestCollectUpstreamStreamUsageOnlyIsEmpty(t *testing.T) {
+	usageOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer usageOnly.Close()
+	old := upstreamChatURL
+	upstreamChatURL = usageOnly.URL
+	defer func() { upstreamChatURL = old }()
+
+	body, rid, sid, _ := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
+	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
+	_, _, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "empty completion") {
+		t.Fatalf("usage-only stream must fail the empty guard, got %v", err)
+	}
+}
+
+// TestCollectUpstreamStreamReasoningOnlyIsOutput verifies reasoning_content
+// counts as model output for the guard.
+func TestCollectUpstreamStreamReasoningOnlyIsOutput(t *testing.T) {
+	reasoning := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer reasoning.Close()
+	old := upstreamChatURL
+	upstreamChatURL = reasoning.URL
+	defer func() { upstreamChatURL = old }()
+
+	body, rid, sid, _ := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
+	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
+	chunks, _, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, nil)
+	if err != nil {
+		t.Fatalf("reasoning-only stream rejected: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
 	}
 }

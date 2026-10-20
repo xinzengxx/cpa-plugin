@@ -162,8 +162,14 @@ func TestCompletionLooksEmpty(t *testing.T) {
 	if completionLooksEmpty(toolOnly) {
 		t.Fatal("tool-only completion must not be treated as empty")
 	}
-	withUsage := []byte(`{"choices":[{"message":{"role":"assistant","content":""}}],"usage":{"total_tokens":7}}`)
-	if completionLooksEmpty(withUsage) {
-		t.Fatal("usage-bearing completion must not be treated as empty")
+	reasoningOnly := []byte(`{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"thinking..."}}]}`)
+	if completionLooksEmpty(reasoningOnly) {
+		t.Fatal("reasoning-only completion must not be treated as empty")
+	}
+	// Token counts are not output: a content-less completion with usage must
+	// still fail the guard instead of turning into an empty 200.
+	usageOnly := []byte(`{"choices":[{"message":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`)
+	if !completionLooksEmpty(usageOnly) {
+		t.Fatal("usage-only completion must be treated as empty")
 	}
 }

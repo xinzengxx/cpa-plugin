@@ -32,7 +32,13 @@ func handleImportPAT(req pluginapi.ManagementRequest) map[string]any {
 	if err != nil {
 		return map[string]any{"success": false, "error": "jobToken exchange: " + err.Error()}
 	}
-	ui, _ := fetchUserInfo(tok.Token) // best-effort
+	// Identity is mandatory (spec §5.1/§2): a UID-less credential would be
+	// written as legacy qoder.json, which hostAuthList never lists, so the
+	// account would silently escape management. Fail loudly instead.
+	ui, err := requireUserInfo(fetchUserInfo(tok.Token))
+	if err != nil {
+		return map[string]any{"success": false, "error": err.Error()}
+	}
 	sa := buildStoredAuthFromJobToken(pat, tok, ui)
 
 	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)

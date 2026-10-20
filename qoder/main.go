@@ -5,10 +5,11 @@
 // the OpenAI-compatible api2-v2 chat endpoint. Exactly one client-facing
 // model is exposed: claude-opus-5-5, mapped to the upstream "ultimate" tier.
 //
-// This file is a clean-room reimplementation reconstructed from the public
-// QoderWork (qoderwork.so) binary (symbol table, string constants and RPC
-// shape) published by Sliverkiss. Original credit for the QoderWork plugin
-// goes to Sliverkiss; see https://github.com/Sliverkiss/cpa-plugin. Built with
+// This file is a fork of the QoderWork plugin (qoderwork.so) published by
+// Sliverkiss, adapted for Qoder Global (qoder.sh): device OAuth / PAT auth,
+// the single claude-opus-5-5 → ultimate mapping, and pass-through chat
+// completions. Original credit for the QoderWork plugin goes to Sliverkiss;
+// see https://github.com/Sliverkiss/cpa-plugin. Built with
 // -buildmode=c-shared and exports the cliproxy C ABI entry points.
 package main
 
@@ -77,22 +78,37 @@ const (
 	authFileName  = "qoder.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png"
 
-	// Qoder Global: OpenAPI for auth/billing/check-in; api2-v2 for the
-	// OpenAI-compatible chat endpoint. No COSY signing on this path.
-	upstreamBase = "https://openapi.qoder.sh"
-	clientUA     = "Go-http-client/2.0"
-
-	endpointJobTokenExchange = upstreamBase + "/api/v1/jobToken/exchange"
-	endpointJobTokenRefresh  = upstreamBase + "/api/v1/jobToken/refresh"
-
-	endpointUserInfo   = upstreamBase + "/api/v1/userinfo"
-	endpointQuotaUsage = upstreamBase + "/api/v2/quota/usage"
-	endpointUserPlan   = upstreamBase + "/api/v2/user/plan"
-	endpointProUpgrade = upstreamBase + "/sash/api/v1/me/pro-upgrade/claim"
+	clientUA = "Go-http-client/2.0"
 
 	endpointChat = "https://api2-v2.qoder.sh/model/v1/chat/completions"
 
 	loginTTL = 10 * time.Minute
+
+	// loginUserInfoTimeout bounds the userinfo call made after a successful
+	// device poll so the login response is never blocked for long. Spec §5.1
+	// requires identity before the auth file is written, but a stalled
+	// upstream must not hold the poll open.
+	loginUserInfoTimeout = 5 * time.Second
+)
+
+// Upstream endpoint URLs are package-level vars (not consts) so unit tests can
+// point them at httptest servers without touching the real network.
+var (
+	// Qoder Global: OpenAPI for auth/billing/check-in; api2-v2 for the
+	// OpenAI-compatible chat endpoint. No COSY signing on this path.
+	upstreamBase = "https://openapi.qoder.sh"
+
+	endpointJobTokenExchange = upstreamBase + "/api/v1/jobToken/exchange"
+	endpointJobTokenRefresh  = upstreamBase + "/api/v1/jobToken/refresh"
+
+	endpointDeviceTokenPoll    = upstreamBase + "/api/v1/deviceToken/poll"
+	endpointDeviceTokenRefresh = upstreamBase + "/api/v1/deviceToken/refresh"
+
+	endpointUserInfo              = upstreamBase + "/api/v1/userinfo"
+	endpointQuotaUsage            = upstreamBase + "/api/v2/quota/usage"
+	endpointUserPlan              = upstreamBase + "/api/v2/user/plan"
+	endpointProUpgrade            = upstreamBase + "/sash/api/v1/me/pro-upgrade/claim"
+	endpointProUpgradeEligibility = upstreamBase + "/sash/api/v1/me/pro-upgrade/eligibility"
 )
 
 // loginCtx holds one in-flight device-authorization login flow. Qoder's
@@ -227,6 +243,21 @@ func hostCall(method string, request []byte) ([]byte, error) {
 		return out, fmt.Errorf("host call %s returned %d", method, int(rc))
 	}
 	return out, nil
+}
+
+// pluginLog forwards one structured line to the host log (host.log). It is a
+// no-op when no host is attached (unit tests), so logging can never fail a
+// request path.
+func pluginLog(level, message string, fields map[string]any) {
+	payload := map[string]any{"level": level, "message": message}
+	if len(fields) > 0 {
+		payload["fields"] = fields
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = hostCall(pluginabi.MethodHostLog, raw)
 }
 
 // -----------------------------------------------------------------------------
@@ -590,7 +621,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, msg)
 		return nil, fmt.Errorf("%s", msg)
 	}
-	completion, status, err := executeChatWithRetry(sa, req.Model, upstreamModel, req.Payload)
+	completion, status, err := executeChatWithRetry(sa, req.AuthID, req.Model, upstreamModel, req.Payload)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, status, err.Error())
 		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, err.Error())
@@ -653,13 +684,19 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	}
 	body, requestID, sessionID, err := buildPassthroughBody(payload, upstreamModel)
 	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		msg := "passthrough body: " + err.Error()
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, msg)
+		if req.StreamID != "" {
+			streamEmitError(req.StreamID, msg)
+			streamClose(req.StreamID)
+		}
 		return nil, err
 	}
 	headers := streamHeaders()
 	if req.StreamID == "" {
 		collector := &sseUsageCollector{}
-		chunks, status, errCollect := collectUpstreamStream(sa, req.Model, body, requestID, sessionID, sseFramed, collector)
+		chunks, status, errCollect := collectUpstreamStream(sa, req.AuthID, req.Model, body, requestID, sessionID, sseFramed, collector)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, status, errCollect.Error())
 			recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, collector.detail(), collector.credits(), true, errCollect.Error())

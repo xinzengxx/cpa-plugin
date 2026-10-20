@@ -17,6 +17,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -44,12 +45,14 @@ type jobTokenResponse struct {
 }
 
 // doRawJSON sends method to fullURL with the given headers and returns the
-// raw response body. Used for endpoints that return plain JSON (no envelope)
-// like /api/v1/jobToken/exchange and /api/v1/jobToken/refresh.
-func doRawJSON(client *http.Client, method, fullURL string, headers func(*http.Request), body io.Reader) (json.RawMessage, int, error) {
+// decoded body, the raw body (also on HTTP errors, so callers can classify
+// business codes like TOKEN_EXPIRE), the status, and an error. Used for
+// endpoints that return plain JSON (no envelope) like
+// /api/v1/jobToken/exchange and /api/v1/jobToken/refresh.
+func doRawJSON(client *http.Client, method, fullURL string, headers func(*http.Request), body io.Reader) (json.RawMessage, []byte, int, error) {
 	req, err := http.NewRequest(method, fullURL, body)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if headers != nil {
 		headers(req)
@@ -58,24 +61,24 @@ func doRawJSON(client *http.Client, method, fullURL string, headers func(*http.R
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, resp.StatusCode, fmt.Errorf("http_error: upstream %d body=%s", resp.StatusCode, truncateRedacted(string(raw), 200))
+		return nil, raw, resp.StatusCode, fmt.Errorf("http_error: upstream %d body=%s", resp.StatusCode, truncateRedacted(string(raw), upstreamErrorLimit))
 	}
 	if resp.StatusCode >= 300 {
-		return nil, resp.StatusCode, fmt.Errorf("http_error: upstream redirect %d (location: %s)", resp.StatusCode, resp.Header.Get("Location"))
+		return nil, raw, resp.StatusCode, fmt.Errorf("http_error: upstream redirect %d (location: %s)", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	return raw, resp.StatusCode, nil
+	return raw, raw, resp.StatusCode, nil
 }
 
 // exchangePATForJobToken calls POST /api/v1/jobToken/exchange with a PAT and
 // returns the resulting jt-/jrt- pair.
 func exchangePATForJobToken(pat string) (*jobTokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{"personal_token": pat})
-	data, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenExchange, nil, bytes.NewReader(body))
+	data, _, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenExchange, nil, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +95,7 @@ func exchangePATForJobToken(pat string) (*jobTokenResponse, error) {
 // refreshJobToken calls POST /api/v1/jobToken/refresh with a jrt-.
 func refreshJobToken(jrt string) (*jobTokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{"refresh_token": jrt})
-	data, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenRefresh, nil, bytes.NewReader(body))
+	data, _, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobTokenRefresh, nil, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +123,23 @@ type userInfoResponse struct {
 	UserType         string `json:"user_type"` // may be absent; falls back to "personal_professional_trial"
 }
 
-// fetchUserInfo queries /api/v1/userinfo with a jt- Bearer to populate the
+// fetchUserInfo queries /api/v1/userinfo with a jt-/dt- Bearer to populate the
 // auth's identity fields (uid, nickname, user_type for COSY signing).
 // The endpoint returns plain JSON (no envelope) — same as jobToken/exchange.
 func fetchUserInfo(jt string) (*userInfoResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, endpointUserInfo, nil)
+	return fetchUserInfoContext(context.Background(), jt)
+}
+
+// fetchUserInfoWithTimeout bounds the identity lookup (post-login flows must
+// not hold the poll response open).
+func fetchUserInfoWithTimeout(jt string, timeout time.Duration) (*userInfoResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return fetchUserInfoContext(ctx, jt)
+}
+
+func fetchUserInfoContext(ctx context.Context, jt string) (*userInfoResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointUserInfo, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -137,13 +152,27 @@ func fetchUserInfo(jt string) (*userInfoResponse, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("userinfo: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), 200))
+		return nil, fmt.Errorf("userinfo: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), upstreamErrorLimit))
 	}
 	var out userInfoResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("userinfo parse: %w (body=%s)", err, truncateRedacted(string(raw), 200))
+		return nil, fmt.Errorf("userinfo parse: %w (body=%s)", err, truncateRedacted(string(raw), upstreamErrorLimit))
 	}
 	return &out, nil
+}
+
+// requireUserInfo turns a userinfo call into the identity required for a
+// well-formed auth file. Credentials without a UID would fall back to the
+// legacy qoder.json name, which hostAuthList never lists (invisible account),
+// so a missing/empty user_id is a hard error at every import path.
+func requireUserInfo(ui *userInfoResponse, err error) (*userInfoResponse, error) {
+	if err != nil {
+		return nil, fmt.Errorf("userinfo: %w", err)
+	}
+	if ui == nil || strings.TrimSpace(ui.ID) == "" {
+		return nil, fmt.Errorf("userinfo returned empty user_id; refusing to import a credential without UID")
+	}
+	return ui, nil
 }
 
 // buildStoredAuthFromJobToken constructs a storedAuth from a PAT + jobToken
@@ -291,7 +320,7 @@ func pollDeviceToken(nonce, verifier string) (*deviceTokenResponse, bool, error)
 	q.Set("nonce", nonce)
 	q.Set("verifier", verifier)
 	q.Set("challenge_method", "S256")
-	fullURL := upstreamBase + "/api/v1/deviceToken/poll?" + q.Encode()
+	fullURL := endpointDeviceTokenPoll + "?" + q.Encode()
 
 	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -309,7 +338,7 @@ func pollDeviceToken(nonce, verifier string) (*deviceTokenResponse, bool, error)
 		return nil, true, nil
 	}
 	if resp.StatusCode >= 400 {
-		return nil, false, fmt.Errorf("deviceToken poll: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), 200))
+		return nil, false, fmt.Errorf("deviceToken poll: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), upstreamErrorLimit))
 	}
 	var out deviceTokenResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -324,7 +353,7 @@ func pollDeviceToken(nonce, verifier string) (*deviceTokenResponse, bool, error)
 // refreshDeviceToken calls POST /api/v1/deviceToken/refresh with a drt-.
 func refreshDeviceToken(drt string) (*deviceTokenResponse, error) {
 	body, _ := json.Marshal(map[string]string{"refresh_token": drt})
-	data, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, upstreamBase+"/api/v1/deviceToken/refresh", nil, bytes.NewReader(body))
+	data, _, _, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointDeviceTokenRefresh, nil, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +405,12 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("PAT exchange failed: %w", err)
 		}
-		ui, _ := fetchUserInfo(tok.Token)
+		// Identity is mandatory: a UID-less credential lands on legacy
+		// qoder.json, invisible to hostAuthList/management.
+		ui, err := requireUserInfo(fetchUserInfo(tok.Token))
+		if err != nil {
+			return nil, fmt.Errorf("PAT import: %w", err)
+		}
 		sa := buildStoredAuthFromJobToken(pat, tok, ui)
 		loginStates.Delete(state)
 		return okEnvelope(pluginapi.AuthLoginPollResponse{
@@ -392,13 +426,18 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("device authorization poll: %w", err)
 	}
 	if !pending && tok != nil {
-		// Auth file must land IMMEDIATELY — no upstream calls before return.
-		// The host writes the auth file from AuthLoginPollResponse, so any
-		// blocking work (fetchUserInfo, hostAuthList) delays persistence.
-		// UserID is already in the poll response; nickname is fetched lazily
-		// by the panel on first load. PAT coalescing happens on keepalive.
-		sa := buildStoredAuthFromDeviceToken(tok, nil)
+		// Spec §5.1: userinfo → auth record → pro-upgrade auto-claim. The
+		// userinfo call is bounded (loginUserInfoTimeout) so a slow upstream
+		// cannot hold the poll response; the claim runs after the response
+		// and its failures are logged, never fatal.
+		sa, err := finalizeDeviceLogin(tok, func(jt string) (*userInfoResponse, error) {
+			return fetchUserInfoWithTimeout(jt, loginUserInfoTimeout)
+		})
+		if err != nil {
+			return nil, err
+		}
 		loginStates.Delete(state)
+		go logAutoClaimProUpgrade(sa)
 		return okEnvelope(pluginapi.AuthLoginPollResponse{
 			Status: pluginapi.AuthLoginStatusSuccess,
 			Auth:   toAuthData(sa),
@@ -444,10 +483,8 @@ func deviceExpiryUnix(tok *deviceTokenResponse) int64 {
 }
 
 // buildStoredAuthFromDeviceToken maps a device-token grant onto storedAuth.
-// AccessToken=dt-, RefreshToken=drt-. When ui is nil (fast path during
-// PollLogin), UserID comes from the poll response and nickname is empty —
-// the panel fills it lazily on first load. preservePAT=false skips the
-// hostAuthList scan to avoid blocking auth-file persistence.
+// AccessToken=dt-, RefreshToken=drt-. UserID comes from the poll response;
+// nickname falls back to a uid-derived label when userinfo was not available.
 func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoResponse) *storedAuth {
 	expiresAt := deviceExpiryUnix(tok)
 	uid := tok.UserID
@@ -476,6 +513,65 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 			Domain:        "qoder.com",
 		},
 		Account: storedAccount{UID: uid, Nickname: nickname},
+	}
+}
+
+// userInfoFetcher is injectable so the post-poll decision logic is testable
+// without the real OAuth/userinfo endpoints.
+type userInfoFetcher func(string) (*userInfoResponse, error)
+
+// finalizeDeviceLogin performs the spec §5.1 post-poll identity step: fetch
+// userinfo, require a UID, and build the auth record from the authoritative
+// identity. A missing UID is fatal — the account would otherwise be written to
+// legacy qoder.json and never appear in hostAuthList/management.
+func finalizeDeviceLogin(tok *deviceTokenResponse, fetch userInfoFetcher) (*storedAuth, error) {
+	if tok == nil || strings.TrimSpace(tok.accessToken()) == "" {
+		return nil, fmt.Errorf("device authorization: empty access token")
+	}
+	ui, err := requireUserInfo(fetch(tok.accessToken()))
+	if err != nil {
+		return nil, err
+	}
+	sa := buildStoredAuthFromDeviceToken(tok, ui)
+	if strings.TrimSpace(sa.Account.UID) == "" {
+		return nil, fmt.Errorf("device authorization: empty user_id (poll=%q userinfo=%q)", tok.UserID, ui.ID)
+	}
+	return sa, nil
+}
+
+// autoClaimProUpgrade runs the one-time pro-upgrade eligibility check and
+// claim. The error is informational only: login has already succeeded and the
+// manual "领取Pro" panel button remains available as a fallback.
+func autoClaimProUpgrade(sa *storedAuth) error {
+	if sa == nil {
+		return fmt.Errorf("nil auth")
+	}
+	eligible, err := checkProUpgradeEligibility(sa)
+	if err != nil {
+		return fmt.Errorf("eligibility: %w", err)
+	}
+	if !eligible {
+		return nil
+	}
+	res, err := claimProUpgrade(sa)
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+	if success, ok := res["success"].(bool); ok && !success {
+		msg, _ := res["message"].(string)
+		return fmt.Errorf("claim rejected: %s", msg)
+	}
+	return nil
+}
+
+// logAutoClaimProUpgrade runs the post-login claim off the poll response path
+// and logs a non-fatal warning when it cannot complete.
+func logAutoClaimProUpgrade(sa *storedAuth) {
+	if err := autoClaimProUpgrade(sa); err != nil {
+		pluginLog("warn", "qoder: automatic pro-upgrade claim failed", map[string]any{
+			"uid":   sa.Account.UID,
+			"error": err.Error(),
+		})
 	}
 }
 

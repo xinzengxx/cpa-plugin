@@ -28,14 +28,16 @@ func TestExecuteChatWithRetryRefreshesOnce(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error {
+	var gotRefreshAuthID string
+	refreshForRetry = func(authID string, sa *storedAuth) error {
+		gotRefreshAuthID = authID
 		sa.Auth.AccessToken = "dt-refreshed"
 		return nil
 	}
 	defer func() { upstreamChatURL, refreshForRetry = oldURL, oldRefresh }()
 
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-	if _, _, err := executeChatWithRetry(sa, clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`)); err != nil {
+	if _, _, err := executeChatWithRetry(sa, "auth-123", clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`)); err != nil {
 		t.Fatalf("retry failed: %v", err)
 	}
 	if calls != 2 {
@@ -43,6 +45,9 @@ func TestExecuteChatWithRetryRefreshesOnce(t *testing.T) {
 	}
 	if secondAuth != "Bearer dt-refreshed" {
 		t.Fatalf("second auth = %q", secondAuth)
+	}
+	if gotRefreshAuthID != "auth-123" {
+		t.Fatalf("refresh authID = %q, want auth-123", gotRefreshAuthID)
 	}
 }
 
@@ -70,13 +75,13 @@ func TestExecuteChatWithRetrySkipsRefreshOnOtherStatuses(t *testing.T) {
 		oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 		upstreamChatURL = srv.URL
 		refreshed := false
-		refreshForRetry = func(sa *storedAuth) error {
+		refreshForRetry = func(authID string, sa *storedAuth) error {
 			refreshed = true
 			return nil
 		}
 
 		sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-		_, gotStatus, err := executeChatWithRetry(sa, clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+		_, gotStatus, err := executeChatWithRetry(sa, "", clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 		upstreamChatURL, refreshForRetry = oldURL, oldRefresh
 		srv.Close()
 
@@ -98,14 +103,14 @@ func TestExecuteChatWithRetryRetriesOnlyOnce(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error {
+	refreshForRetry = func(authID string, sa *storedAuth) error {
 		sa.Auth.AccessToken = "dt-refreshed"
 		return nil
 	}
 	defer func() { upstreamChatURL, refreshForRetry = oldURL, oldRefresh }()
 
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-	_, status, err := executeChatWithRetry(sa, clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	_, status, err := executeChatWithRetry(sa, "", clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 	if err == nil || status != http.StatusUnauthorized {
 		t.Fatalf("persistent 401 must surface: status %d err %v", status, err)
 	}
@@ -120,11 +125,11 @@ func TestExecuteChatWithRetrySurfacesRefreshFailure(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error { return errStubRefresh }
+	refreshForRetry = func(authID string, sa *storedAuth) error { return errStubRefresh }
 	defer func() { upstreamChatURL, refreshForRetry = oldURL, oldRefresh }()
 
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-	_, status, err := executeChatWithRetry(sa, clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	_, status, err := executeChatWithRetry(sa, "", clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 	if err == nil || status != http.StatusForbidden {
 		t.Fatalf("status %d err %v", status, err)
 	}
@@ -158,7 +163,7 @@ func TestCollectUpstreamStreamRetriesOnceOn401(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error {
+	refreshForRetry = func(authID string, sa *storedAuth) error {
 		sa.Auth.AccessToken = "dt-refreshed"
 		return nil
 	}
@@ -169,7 +174,7 @@ func TestCollectUpstreamStreamRetriesOnceOn401(t *testing.T) {
 		t.Fatalf("body: %v", err)
 	}
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-	chunks, status, err := collectUpstreamStream(sa, clientModelID, body, rid, sid, false, &sseUsageCollector{})
+	chunks, status, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, &sseUsageCollector{})
 	if err != nil {
 		t.Fatalf("collect retry failed: %v (status %d)", err, status)
 	}
@@ -193,7 +198,7 @@ func TestCollectUpstreamStreamSurfacesRefreshFailure(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error { return errStubRefresh }
+	refreshForRetry = func(authID string, sa *storedAuth) error { return errStubRefresh }
 	defer func() { upstreamChatURL, refreshForRetry = oldURL, oldRefresh }()
 
 	body, rid, sid, err := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
@@ -201,7 +206,7 @@ func TestCollectUpstreamStreamSurfacesRefreshFailure(t *testing.T) {
 		t.Fatalf("body: %v", err)
 	}
 	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-old", RefreshToken: "drt-old"}}
-	chunks, status, err := collectUpstreamStream(sa, clientModelID, body, rid, sid, false, &sseUsageCollector{})
+	chunks, status, err := collectUpstreamStream(sa, "", clientModelID, body, rid, sid, false, &sseUsageCollector{})
 	if err == nil || status != http.StatusUnauthorized {
 		t.Fatalf("status %d err %v", status, err)
 	}
@@ -258,7 +263,7 @@ func TestPumpUpstreamStreamResetsStaleRejectedBody(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error {
+	refreshForRetry = func(authID string, sa *storedAuth) error {
 		sa.Auth.AccessToken = "dt-refreshed"
 		return nil
 	}
@@ -297,7 +302,7 @@ func TestPumpUpstreamStreamSurfacesRefreshFailure(t *testing.T) {
 	defer srv.Close()
 	oldURL, oldRefresh := upstreamChatURL, refreshForRetry
 	upstreamChatURL = srv.URL
-	refreshForRetry = func(sa *storedAuth) error { return errStubRefresh }
+	refreshForRetry = func(authID string, sa *storedAuth) error { return errStubRefresh }
 	defer func() { upstreamChatURL, refreshForRetry = oldURL, oldRefresh }()
 	resetRecentCalls()
 
@@ -332,5 +337,48 @@ func TestUpstreamFailureTextIncludesRefreshFailure(t *testing.T) {
 	plain := upstreamFailureText(http.StatusUnauthorized, body, 200, nil)
 	if strings.Contains(plain, "refresh failed") {
 		t.Fatalf("message %q must not mention refresh without a refresh error", plain)
+	}
+	// A long upstream body must not push the refresh suffix past the
+	// end-to-end 500-char cap.
+	longBody := []byte(`{"error":{"message":"` + strings.Repeat("x", 900) + `"}}`)
+	long := upstreamFailureText(http.StatusUnauthorized, longBody, upstreamErrorLimit, errStubRefresh)
+	if len(long) > upstreamErrorLimit {
+		t.Fatalf("message len = %d, want <= %d", len(long), upstreamErrorLimit)
+	}
+	if !strings.Contains(long, "refresh failed") {
+		t.Fatalf("long body truncated the refresh suffix: %q", long[len(long)-80:])
+	}
+}
+
+// TestPumpUpstreamStreamRejectsUsageOnlyCompletion pins the stream pump guard:
+// a usage-bearing but content-less completion must be reported as empty, not
+// forwarded as a successful 200.
+func TestPumpUpstreamStreamRejectsUsageOnlyCompletion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// No finish_reason: cleanChunkJSON drops the empty delta entirely, so
+		// the pump reaches the guard without needing a host stream emitter.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{}}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+	oldURL := upstreamChatURL
+	upstreamChatURL = srv.URL
+	defer func() { upstreamChatURL = oldURL }()
+	resetRecentCalls()
+
+	body, rid, sid, err := buildPassthroughBody([]byte(`{"messages":[{"role":"user","content":"hi"}]}`), upstreamUltimate)
+	if err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
+	pumpUpstreamStream(context.Background(), nil, sa, body, rid, sid, "", false, clientModelID, upstreamUltimate, "", "", time.Now(), "")
+
+	got := lastRecentCall(t)
+	if got.OK || !strings.Contains(got.Error, "empty completion") {
+		t.Fatalf("usage-only pump recorded ok=%v error=%q", got.OK, got.Error)
+	}
+	if got.TotalTokens != 5 {
+		t.Fatalf("recorded total tokens = %d, want 5", got.TotalTokens)
 	}
 }

@@ -54,7 +54,7 @@ type quotaUsageResponse struct {
 // fetchUserResource queries QoderWork's quota endpoint and aggregates base +
 // add-on credits into the panel's creditsSummary shape.
 func fetchUserResource(sa *storedAuth) (*creditsSummary, error) {
-	req, err := http.NewRequest(http.MethodGet, upstreamBase+"/api/v2/quota/usage", nil)
+	req, err := http.NewRequest(http.MethodGet, endpointQuotaUsage, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func fetchUserResource(sa *storedAuth) (*creditsSummary, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("quota/usage http %d body=%s", resp.StatusCode, truncateRedacted(string(resp.Body), 200))
+		return nil, fmt.Errorf("quota/usage http %d body=%s", resp.StatusCode, truncateRedacted(string(resp.Body), upstreamErrorLimit))
 	}
 	var q quotaUsageResponse
 	if err := json.Unmarshal(resp.Body, &q); err != nil {
@@ -96,7 +96,7 @@ type planResponse struct {
 }
 
 func fetchPaymentType(sa *storedAuth) string {
-	req, err := http.NewRequest(http.MethodGet, upstreamBase+"/api/v2/user/plan", nil)
+	req, err := http.NewRequest(http.MethodGet, endpointUserPlan, nil)
 	if err != nil {
 		return ""
 	}

@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -88,7 +90,7 @@ func executeChatOnce(sa *storedAuth, requestedModel, upstreamModel string, paylo
 	reader := newHostStreamReader(stream)
 	if status >= 400 {
 		raw, _ := io.ReadAll(reader)
-		return nil, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(string(raw), 300))
+		return nil, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(string(raw), upstreamErrorLimit))
 	}
 	completion, err := aggregateCompletion(reader, requestedModel)
 	if err != nil {
@@ -103,70 +105,158 @@ func executeChatOnce(sa *storedAuth, requestedModel, upstreamModel string, paylo
 // refreshForRetry is injectable so tests do not hit the network.
 var refreshForRetry = refreshStoredTokens
 
-func refreshStoredTokens(sa *storedAuth) error {
-	rt := strings.TrimSpace(sa.Auth.RefreshToken)
+// Hooks around host auth-store access, overridable in tests (the cgo host
+// bridge is unavailable there).
+var (
+	refreshTargetResolver = resolveRefreshAuthIndex
+	loadAuthForRefresh    = hostAuthGet
+	persistRefreshedAuth  = persistAuthTokens
+)
+
+// refreshLocks serializes credential refreshes per auth. Keyed by UID when
+// known (AuthID may be an opaque runtime index), then AuthID / refresh token.
+var refreshLocks sync.Map // key -> *sync.Mutex
+
+func refreshLockFor(keys ...string) *sync.Mutex {
+	key := "qoder"
+	for _, k := range keys {
+		if k = strings.TrimSpace(k); k != "" {
+			key = k
+			break
+		}
+	}
+	actual, _ := refreshLocks.LoadOrStore(key, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
+// resolveRefreshAuthIndex maps the executor's AuthID (runtime index, record
+// ID, or account UID) to a host auth index. The UID is tried as a fallback so
+// a renamed/opaque AuthID still resolves.
+func resolveRefreshAuthIndex(authID string, sa *storedAuth) string {
+	candidates := []string{strings.TrimSpace(authID)}
+	if sa != nil {
+		candidates = append(candidates, strings.TrimSpace(sa.Account.UID))
+	}
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if idx, _ := resolveAuthIndexAndID(c); idx != "" {
+			return idx
+		}
+	}
+	return ""
+}
+
+// refreshStoredTokens refreshes the credential for one auth and persists the
+// new pair through the keepalive path before exposing it to the retry.
+//
+// drt- rotates on every refresh, so an in-memory-only update would leave the
+// auth file holding a dead refresh token after the next 401. The whole
+// operation is serialized per auth, and any credential a concurrent refresh
+// persisted while we waited is adopted first so an already-rotated token is
+// never replayed. When no host auth index can be resolved, the refresh is
+// refused rather than silently rotating an unpersisted token.
+func refreshStoredTokens(authID string, sa *storedAuth) error {
+	if sa == nil {
+		return fmt.Errorf("no auth to refresh")
+	}
+	mu := refreshLockFor(sa.Account.UID, authID, sa.Auth.RefreshToken, sa.Auth.PersonalToken)
+	mu.Lock()
+	defer mu.Unlock()
+
+	authIndex := refreshTargetResolver(authID, sa)
+	if authIndex == "" {
+		return fmt.Errorf("cannot persist refreshed tokens: no host auth index for auth %q (uid %q); refusing to rotate tokens in memory only", authID, sa.Account.UID)
+	}
+	// Adopt a pair persisted by a concurrent refresh (host auto-refresh,
+	// another 401 retry, or keepalive) while this request waited on the lock.
+	if disk, err := loadAuthForRefresh(authIndex); err == nil && disk != nil {
+		if drt := strings.TrimSpace(disk.Auth.RefreshToken); drt != "" && drt != strings.TrimSpace(sa.Auth.RefreshToken) {
+			sa.Auth.AccessToken = disk.Auth.AccessToken
+			sa.Auth.RefreshToken = disk.Auth.RefreshToken
+			sa.Auth.ExpiresAt = disk.Auth.ExpiresAt
+			if strings.TrimSpace(disk.Auth.PersonalToken) != "" {
+				sa.Auth.PersonalToken = disk.Auth.PersonalToken
+			}
+		}
+	}
+
+	next := sa.Auth
+	rt := strings.TrimSpace(next.RefreshToken)
 	switch {
 	case strings.HasPrefix(rt, "drt-"):
 		tok, err := refreshDeviceToken(rt)
 		if err != nil {
 			return err
 		}
-		sa.Auth.AccessToken = tok.accessToken()
-		sa.Auth.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
-		return nil
+		next.AccessToken = tok.accessToken()
+		next.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
+		next.ExpiresAt = preserveExpiry(deviceExpiryUnix(tok), next.ExpiresAt)
 	case strings.HasPrefix(rt, "jrt-"):
 		tok, err := refreshJobToken(rt)
 		if err != nil {
 			return err
 		}
-		sa.Auth.AccessToken = tok.Token
-		sa.Auth.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
-		return nil
-	case strings.HasPrefix(strings.TrimSpace(sa.Auth.PersonalToken), "pt-"):
-		tok, err := exchangePATForJobToken(sa.Auth.PersonalToken)
+		next.AccessToken = tok.Token
+		next.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
+		next.ExpiresAt = preserveExpiry(time.Now().Add(time.Duration(tok.ExpiresIn)*time.Millisecond).Unix(), next.ExpiresAt)
+	case strings.HasPrefix(strings.TrimSpace(next.PersonalToken), "pt-"):
+		tok, err := exchangePATForJobToken(next.PersonalToken)
 		if err != nil {
 			return err
 		}
-		sa.Auth.AccessToken = tok.Token
-		sa.Auth.RefreshToken = tok.RefreshToken
-		return nil
+		next.AccessToken = tok.Token
+		next.RefreshToken = tok.RefreshToken
+		next.ExpiresAt = preserveExpiry(time.Now().Add(time.Duration(tok.ExpiresIn)*time.Millisecond).Unix(), next.ExpiresAt)
+	default:
+		return fmt.Errorf("no refresh credential")
 	}
-	return fmt.Errorf("no refresh credential")
+
+	updated := *sa
+	updated.Auth = next
+	if err := persistRefreshedAuth(authIndex, &updated); err != nil {
+		return fmt.Errorf("refresh succeeded but persist failed: %w", err)
+	}
+	sa.Auth = next
+	return nil
 }
 
 // executeChatWithRetry retries exactly once on 401/403 after refreshing the
-// credential in memory. Any other status (400/404/429/5xx) is returned as-is
-// without a refresh. A failed refresh surfaces the original upstream error
-// plus the refresh failure.
-func executeChatWithRetry(sa *storedAuth, requestedModel, upstreamModel string, payload []byte) ([]byte, int, error) {
+// credential. Any other status (400/404/429/5xx) is returned as-is without a
+// refresh. A failed refresh surfaces the original upstream error plus the
+// refresh failure.
+func executeChatWithRetry(sa *storedAuth, authID, requestedModel, upstreamModel string, payload []byte) ([]byte, int, error) {
 	completion, status, err := executeChatOnce(sa, requestedModel, upstreamModel, payload)
 	if err == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
 		return completion, status, err
 	}
-	if rerr := refreshForRetry(sa); rerr != nil {
+	if rerr := refreshForRetry(authID, sa); rerr != nil {
 		return nil, status, fmt.Errorf("%w (refresh failed: %v)", err, rerr)
 	}
 	return executeChatOnce(sa, requestedModel, upstreamModel, payload)
 }
 
+// completionLooksEmpty reports whether a folded completion carries no model
+// output. Usage alone does NOT count: a content-less completion with token
+// counts is still an empty 200 and must fail the guard.
 func completionLooksEmpty(completion []byte) bool {
 	var c struct {
 		Choices []struct {
 			Message map[string]any `json:"message"`
 		} `json:"choices"`
-		Usage map[string]any `json:"usage"`
 	}
 	if json.Unmarshal(completion, &c) != nil {
 		return true
-	}
-	if v, ok := c.Usage["total_tokens"].(float64); ok && v > 0 {
-		return false
 	}
 	for _, ch := range c.Choices {
 		if s, _ := ch.Message["content"].(string); strings.TrimSpace(s) != "" {
 			return false
 		}
 		if tc, ok := ch.Message["tool_calls"].([]any); ok && len(tc) > 0 {
+			return false
+		}
+		if s, _ := ch.Message["reasoning_content"].(string); strings.TrimSpace(s) != "" {
 			return false
 		}
 	}
