@@ -209,9 +209,8 @@ func uiUserType(ui *userInfoResponse) string {
 // -----------------------------------------------------------------------------
 
 const (
-	qoderWebsiteCN   = "https://qoder.com"
-	qoderClientID    = "1c5e33e1-364d-4ce6-b02c-acaa81274a5c"
-	qoderRedirectURI = "qoder-work-cn://"
+	qoderWebsite  = "https://qoder.com"
+	qoderClientID = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"
 )
 
 // deviceTokenResponse mirrors /api/v1/deviceToken/{poll,refresh} payloads.
@@ -258,7 +257,7 @@ func makePKCE() (string, string) {
 // authorization URL and stash the PKCE verifier under the returned state.
 func handleStartLogin(raw []byte) ([]byte, error) {
 	verifier, challenge := makePKCE()
-	nonce := uuid.NewString()
+	nonce := strings.ReplaceAll(uuid.NewString(), "-", "")
 	machineID := uuid.NewString()
 
 	q := url.Values{}
@@ -267,8 +266,7 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 	q.Set("nonce", nonce)
 	q.Set("machine_id", machineID)
 	q.Set("client_id", qoderClientID)
-	q.Set("redirect_uri", qoderRedirectURI)
-	authURL := qoderWebsiteCN + "/device/selectAccounts?" + q.Encode()
+	authURL := qoderWebsite + "/device/selectAccounts?" + q.Encode()
 
 	now := time.Now()
 	state := fmt.Sprintf("qw-%d", now.UnixNano())
@@ -280,7 +278,7 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 		ExpiresAt: now.Add(loginTTL).UTC(),
 		Metadata: map[string]any{
 			"logo":   pluginLogoURL,
-			"prompt": "在打开的页面中登录并授权 QoderWork（设备授权，无需 PAT）。完成后此窗口会自动关闭。",
+			"prompt": "在打开的页面中登录并授权 Qoder（国际版）。完成后此窗口会自动关闭。",
 		},
 	})
 }
