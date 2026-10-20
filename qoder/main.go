@@ -58,6 +58,7 @@ extern void cliproxyPluginShutdown(void);
 import "C"
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -668,9 +669,58 @@ type executorStreamRequest struct {
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
-// handleExecStream is implemented in Task 3 (streaming pass-through).
+// handleExecStream implements the streaming pass-through: async requests get a
+// goroutine pump that emits chunks to the host stream id, synchronous ones
+// collect every chunk and return them in the envelope.
 func handleExecStream(raw []byte) ([]byte, error) {
-	return nil, fmt.Errorf("executor_not_implemented: qoder global executor lands in Task 3")
+	var req executorStreamRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	sa, err := parseStored(req.StorageJSON)
+	if err != nil {
+		return nil, err
+	}
+	upstreamModel := cpaToUpstreamKey(req.Model)
+	started := time.Now()
+	authUID := sa.Account.UID
+	sseFramed := clientNeedsSSEFrame(req.Metadata)
+	if !isAllowedUpstreamModel(upstreamModel) {
+		msg := fmt.Sprintf("model_not_supported: qoder serves %s only (got %q)", clientModelID, req.Model)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, msg)
+		if req.StreamID != "" {
+			streamEmitError(req.StreamID, msg)
+			streamClose(req.StreamID)
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	payload := req.Payload
+	if len(payload) == 0 {
+		payload = req.OriginalRequest
+	}
+	body, requestID, sessionID, err := buildPassthroughBody(payload, upstreamModel)
+	if err != nil {
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		return nil, err
+	}
+	headers := streamHeaders()
+	if req.StreamID == "" {
+		collector := &sseUsageCollector{}
+		chunks, status, errCollect := collectUpstreamStream(sa, req.Model, body, requestID, sessionID, sseFramed, collector)
+		if errCollect != nil {
+			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, status, errCollect.Error())
+			recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, collector.detail(), collector.credits(), true, errCollect.Error())
+			return nil, errCollect
+		}
+		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, true, started, collector.detail(), collector.credits(), false, "")
+		invalidateAccountCredits(req.AuthID, authUID)
+		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go pumpUpstreamStream(ctx, cancel, sa, body, requestID, sessionID, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, sa.Account.Nickname, started, req.AuthID)
+	return okEnvelope(streamResponse{Headers: headers})
 }
 
 // -----------------------------------------------------------------------------

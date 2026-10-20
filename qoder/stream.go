@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 // streamEmit pushes one chunk payload to the host stream. Returns an error if
@@ -336,6 +339,198 @@ func isEmptyValue(v any) bool {
 			}
 		}
 		return true
+	}
+	return false
+}
+
+// streamErrorMessage extracts an upstream error carried inside a data line.
+// Normal chunks always have "choices" or "usage"; only error objects are
+// treated as failures.
+func streamErrorMessage(line string) string {
+	var obj map[string]any
+	if json.Unmarshal([]byte(line), &obj) != nil {
+		return ""
+	}
+	if _, ok := obj["choices"]; ok {
+		return ""
+	}
+	if _, ok := obj["usage"]; ok {
+		return ""
+	}
+	if e, ok := obj["error"].(map[string]any); ok {
+		if msg, _ := e["message"].(string); strings.TrimSpace(msg) != "" {
+			return strings.TrimSpace(msg)
+		}
+	}
+	if msg, ok := obj["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return strings.TrimSpace(msg)
+	}
+	return ""
+}
+
+func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *storedAuth, body []byte, requestID, sessionID, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID, nickname string, started time.Time, authID string) {
+	closed := false
+	closeOnce := func() {
+		if !closed {
+			closed = true
+			streamClose(streamID)
+		}
+	}
+	defer closeOnce()
+	if cancel != nil {
+		defer cancel()
+	}
+	httpReq, err := buildChatRequestWithContext(ctx, sa, body, requestID, sessionID)
+	if err != nil {
+		streamEmitError(streamID, err.Error())
+		return
+	}
+	stream, status, _, err := hostHTTPDoStream(httpReq)
+	if err != nil {
+		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, err.Error())
+		streamEmitError(streamID, "http_error: "+err.Error())
+		return
+	}
+	defer stream.Close()
+	reader := newHostStreamReader(stream)
+	if status >= 400 {
+		raw, _ := io.ReadAll(reader)
+		detail := truncateRedacted(string(raw), 300)
+		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, status, detail)
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, detail)
+		if authUID != "" {
+			go reconcileByUID(authUID, status, string(raw))
+		}
+		streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", status, truncateRedacted(string(raw), 200)))
+		return
+	}
+	collector := &sseUsageCollector{}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+		if msg := streamErrorMessage(payload); msg != "" {
+			detail := truncateRedacted(msg, 300)
+			publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, detail)
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, "upstream error: "+detail)
+			streamEmitError(streamID, "upstream error: "+detail)
+			return
+		}
+		collector.feed(payload)
+		cleaned := cleanChunkJSON(payload)
+		if cleaned == "" {
+			continue
+		}
+		if sseFramed {
+			cleaned = "data: " + cleaned
+		}
+		if err := streamEmit(streamID, []byte(cleaned)); err != nil {
+			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error())
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, "stream_emit: "+err.Error())
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error())
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, err.Error())
+		streamEmitError(streamID, "upstream stream read error: "+err.Error())
+		return
+	}
+	if !collector.hasOutput && collector.detail().TotalTokens == 0 {
+		const msg = "upstream returned an empty completion"
+		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, msg)
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, msg)
+		streamEmitError(streamID, msg)
+		return
+	}
+	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+	recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), false, "")
+	invalidateAccountCredits(authID, authUID)
+}
+
+func collectUpstreamStream(sa *storedAuth, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+	req, err := buildChatRequest(sa, body, requestID, sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
+	stream, status, _, err := hostHTTPDoStream(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("http_error: %w", err)
+	}
+	defer stream.Close()
+	reader := newHostStreamReader(stream)
+	if status >= 400 {
+		raw, _ := io.ReadAll(reader)
+		return nil, status, fmt.Errorf("upstream %d: %s", status, truncateRedacted(string(raw), 200))
+	}
+	chunks := make([]pluginapi.ExecutorStreamChunk, 0, 64)
+	hasOutput := false
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		if msg := streamErrorMessage(payload); msg != "" {
+			return chunks, 0, fmt.Errorf("upstream error: %s", truncateRedacted(msg, 200))
+		}
+		if collector != nil {
+			collector.feed(payload)
+			if collector.hasOutput {
+				hasOutput = true
+			}
+		} else if chunkHasOutput(payload) {
+			hasOutput = true
+		}
+		cleaned := cleanChunkJSON(payload)
+		if cleaned == "" {
+			continue
+		}
+		if sseFramed {
+			cleaned = "data: " + cleaned
+		}
+		chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: json.RawMessage(cleaned)})
+	}
+	if err := scanner.Err(); err != nil {
+		return chunks, 0, fmt.Errorf("upstream stream read error: %w", err)
+	}
+	if !hasOutput {
+		return chunks, 0, fmt.Errorf("upstream returned an empty completion")
+	}
+	return chunks, 0, nil
+}
+
+func chunkHasOutput(payload string) bool {
+	var chunk map[string]any
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
+		return false
+	}
+	choices, _ := chunk["choices"].([]any)
+	for _, raw := range choices {
+		choice, _ := raw.(map[string]any)
+		delta, _ := choice["delta"].(map[string]any)
+		if s, _ := delta["content"].(string); s != "" {
+			return true
+		}
+		if tc, _ := delta["tool_calls"].([]any); len(tc) > 0 {
+			return true
+		}
 	}
 	return false
 }
