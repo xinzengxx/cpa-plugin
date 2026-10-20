@@ -66,6 +66,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -618,9 +619,36 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi
 
 // -----------------------------------------------------------------------------
 
-// handleExecExecute is implemented in Task 2 (non-streaming pass-through).
 func handleExecExecute(raw []byte) ([]byte, error) {
-	return nil, fmt.Errorf("executor_not_implemented: qoder global executor lands in Task 2")
+	var req pluginapi.ExecutorRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	sa, err := parseStored(req.StorageJSON)
+	if err != nil {
+		return nil, err
+	}
+	upstreamModel := cpaToUpstreamKey(req.Model)
+	started := time.Now()
+	authUID := sa.Account.UID
+	if !isAllowedUpstreamModel(upstreamModel) {
+		msg := fmt.Sprintf("model_not_supported: qoder serves %s only (got %q)", clientModelID, req.Model)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, msg)
+		return nil, fmt.Errorf("%s", msg)
+	}
+	completion, status, err := executeChatOnce(sa, req.Model, upstreamModel, req.Payload)
+	if err != nil {
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, status, err.Error())
+		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, err.Error())
+		reconcileAfterExecutorError(req.AuthID, status, err.Error())
+		return nil, err
+	}
+	detail := usageDetailFromCompletion(completion)
+	publishUsage(req.Model, upstreamModel, authUID, started, detail, false, 0, "")
+	recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, detail, creditsFromCompletion(completion), false, "")
+	invalidateAccountCredits(req.AuthID, authUID)
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
 
 // stripProviderPrefix removes the leading "qoder/" (or any "<provider>/")
