@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -88,16 +87,26 @@ func campaignHeaders(req *http.Request, sa *storedAuth) error {
 	req.Header.Set("Cosy-Version", campaignVersion)
 	req.Header.Set("Cosy-MachineOS", campaignMachineOS())
 
-	id := deriveMachineID(sa.Account.UID)
-	token := deriveMachineToken(sa.Account.UID)
-	machineType := deriveMachineType(sa.Account.UID)
-	if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
-		req.Header.Set("Cosy-MachineHostname", host)
+	if fp := configuredFingerprint(); fp != nil {
+		req.Header.Set("Cosy-MachineId", fp.MachineID)
+		req.Header.Set("Cosy-MachineToken", fp.MachineToken)
+		req.Header.Set("Cosy-MachineType", fp.MachineType)
+		if fp.MachineCode != "" {
+			req.Header.Set("Cosy-MachineCode", fp.MachineCode)
+		}
+		if fp.Hostname != "" {
+			req.Header.Set("Cosy-MachineHostname", fp.Hostname)
+		}
+		if fp.MachineOS != "" {
+			req.Header.Set("Cosy-MachineOS", fp.MachineOS)
+		}
+	} else {
+		id := deriveMachineID(sa.Account.UID)
+		req.Header.Set("Cosy-MachineId", id)
+		req.Header.Set("Cosy-MachineToken", deriveMachineToken(sa.Account.UID))
+		req.Header.Set("Cosy-MachineType", deriveMachineType(sa.Account.UID))
+		req.Header.Set("Cosy-MachineCode", id)
 	}
-	req.Header.Set("Cosy-MachineId", id)
-	req.Header.Set("Cosy-MachineToken", token)
-	req.Header.Set("Cosy-MachineType", machineType)
-	req.Header.Set("Cosy-MachineCode", id)
 	return nil
 }
 

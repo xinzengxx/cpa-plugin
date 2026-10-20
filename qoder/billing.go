@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,70 +21,10 @@ func billingHeaders(req *http.Request, sa *storedAuth) {
 	req.Header.Set("Content-Type", "application/json")
 }
 
-// checkinStatusResponse mirrors GET /sash/api/v1/me/daily-check-in/status
-// (plain JSON, no envelope).
-type checkinStatusResponse struct {
-	Status             string `json:"status"` // CLAIMABLE | CLAIMED
-	RewardCredits      int64  `json:"rewardCredits"`
-	NextClaimAt        int64  `json:"nextClaimAt"` // s epoch
-	CurrentStreakDays  int64  `json:"currentStreakDays"`
-	TotalClaimDays     int64  `json:"totalClaimDays"`
-	TotalRewardCredits int64  `json:"totalRewardCredits"`
-	LastClaimedAt      int64  `json:"lastClaimedAt"`   // s epoch
-	RewardExpiresAt    int64  `json:"rewardExpiresAt"` // s epoch
-}
-
-func fetchLegacyCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamBase+"/sash/api/v1/me/daily-check-in/status", nil)
-	if err != nil {
-		return nil, err
-	}
-	billingHeaders(req, sa)
-	resp, err := hostHTTPDo(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("checkin status http %d body=%s", resp.StatusCode, truncateRedacted(string(resp.Body), 200))
-	}
-	var q checkinStatusResponse
-	if err := json.Unmarshal(resp.Body, &q); err != nil {
-		return nil, fmt.Errorf("checkin status parse: %w", err)
-	}
-	today := time.Now().Format("2006-01-02")
-	lastClaimed := ""
-	if q.LastClaimedAt > 0 {
-		lastClaimed = time.Unix(q.LastClaimedAt, 0).Format("2006-01-02")
-	}
-	sum := &checkinSummary{
-		Active:          q.Status == "CLAIMABLE" || q.Status == "CLAIMED",
-		TodayCheckedIn:  q.Status == "CLAIMED" && lastClaimed == today,
-		StreakDays:      q.CurrentStreakDays,
-		DailyCredit:     q.RewardCredits,
-		TodayCredit:     0,
-		TotalCredits:    q.TotalRewardCredits,
-		WeekCheckinDays: q.TotalClaimDays,
-		ActivityName:    "每日签到",
-	}
-	if sum.TodayCheckedIn {
-		sum.TodayCredit = q.RewardCredits
-	}
-	return sum, nil
-}
-
-// fetchCheckinStatus prefers the current campaign system (act-YYYYMMDD-*,
-// daily 10:00 UTC+8 reset) and only falls back to the legacy
-// /daily-check-in endpoint when the campaign API is unavailable.
+// fetchCheckinStatus reads the current campaign system (act-YYYYMMDD-*,
+// daily 10:00 UTC+8 reset). Campaign is the only supported check-in path.
 func fetchCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
-	if sum, err := fetchCampaignCheckinStatus(sa); err == nil {
-		return sum, nil
-	} else if legacy, legacyErr := fetchLegacyCheckinStatus(sa); legacyErr == nil {
-		return legacy, nil
-	} else {
-		return nil, fmt.Errorf("campaign: %v; legacy: %v", err, legacyErr)
-	}
+	return fetchCampaignCheckinStatus(sa)
 }
 
 // quotaUsageResponse mirrors GET /api/v2/quota/usage response (plain JSON,
@@ -188,7 +127,7 @@ func performCheckinCall(sa *storedAuth) (map[string]any, error) {
 			"success":  false,
 			"inactive": true,
 			"reason":   "inactive",
-			"message":  "当前账号无可用签到活动",
+			"message":  "当前账号无可用签到活动（国际版新号请先在官方 Qoder 客户端领取一次）",
 		}, nil
 	}
 	if state == "claimed" {

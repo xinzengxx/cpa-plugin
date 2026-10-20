@@ -85,12 +85,10 @@ const (
 	endpointJobTokenExchange = upstreamBase + "/api/v1/jobToken/exchange"
 	endpointJobTokenRefresh  = upstreamBase + "/api/v1/jobToken/refresh"
 
-	endpointUserInfo      = upstreamBase + "/api/v1/userinfo"
-	endpointQuotaUsage    = upstreamBase + "/api/v2/quota/usage"
-	endpointUserPlan      = upstreamBase + "/api/v2/user/plan"
-	endpointCheckinStatus = upstreamBase + "/sash/api/v1/me/daily-check-in/status"
-	endpointCheckinClaim  = upstreamBase + "/sash/api/v1/me/daily-check-in/claim"
-	endpointProUpgrade    = upstreamBase + "/sash/api/v1/me/pro-upgrade/claim"
+	endpointUserInfo   = upstreamBase + "/api/v1/userinfo"
+	endpointQuotaUsage = upstreamBase + "/api/v2/quota/usage"
+	endpointUserPlan   = upstreamBase + "/api/v2/user/plan"
+	endpointProUpgrade = upstreamBase + "/sash/api/v1/me/pro-upgrade/claim"
 
 	endpointChat = "https://api2-v2.qoder.sh/model/v1/chat/completions"
 
@@ -340,6 +338,7 @@ func wbRegistration() registration {
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for CN accounts (default true)."},
+				{Name: "checkin_fingerprint", Type: pluginapi.ConfigFieldTypeString, Description: "Optional JSON fingerprint for Global check-in (machine_id/machine_token/machine_type). Fresh Global accounts need the official client to claim once unless this is set."},
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning."},
