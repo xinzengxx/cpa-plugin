@@ -141,7 +141,7 @@ ModelInfo{ID: "claude-opus-5-5", Name: "Qoder Ultimate", ContextLength: 200000, 
 
 ### 7.3 图片
 
-v1 先原样透传 `image_url`（含 `data:` URL）实测。若上游拒绝 data URL：二期复用 qoderwork 的上传链路改到 `api1.qoder.sh`（需引入 COSY），把 data URL 换成 OSS URL 再透传。此为唯一可能引入 COSY 的场景。
+v1 先原样透传 `image_url`（含 `data:` URL）实测。**2026-10-21 实测：上游对 1x1 PNG data URL 返回 `provider_error: Could not process image`**，因此 data URL 图片在 v1 不可用；二期复用 qoderwork 的上传链路改到 `api1.qoder.sh`（需引入 COSY），把 data URL 换成 OSS URL 再透传。此为唯一可能引入 COSY 的场景。
 
 ### 7.4 错误处理
 
@@ -149,6 +149,7 @@ v1 先原样透传 `image_url`（含 `data:` URL）实测。若上游拒绝 data
 |---|---|
 | 401/403 | 按 refreshToken 前缀刷新一次并重试；再失败则透传上游错误 |
 | 429 / 5xx / 排队 JSON | 透传上游状态码与原文（截断脱敏），绝不返回空 200 |
+| 上游 SSE `provider_error`（如 `All models failed`、Bedrock 拒绝、egress proxy） | 在流式与非流式路径都解析 `code`/`message`/`details` 并透出；v1 不自动重试 |
 | 空 completion（无 content 无 tool_calls） | guard：返回显式错误而非空响应 |
 | 未知模型 | 400 + 支持列表 |
 | usage 缺失 | 记 0 并照常上报，不阻塞响应 |
@@ -213,17 +214,38 @@ ZCode / Claude Code
 
 **部署：** `qoder.dylib` → `~/.cli-proxy-api/plugins/`，`config.yaml` 加 `plugins.configs.qoder` 节，`launchctl kickstart -k gui/$(id -u)/sh.brew.cliproxyapi` 重启，逐项验证。
 
+### 11.1 实测绘测结果（2026-10-21）
+
+| 项目 | 结果 |
+|---|---|
+| 插件加载 / `/v1/models` | `claude-opus-5-5` 出现，`owned_by=qoder` |
+| 非流式 | 200，content 正常，上游 `model=ultimate`，usage/credits 正常 |
+| 流式简单对话 | 200，标准 OpenAI SSE chunk |
+| 流式工具调用 | 200，`tool_calls` 增量透传（4 个 delta） |
+| 非流式工具往返 | tool_calls → tool result → 最终回答，成功 |
+| Anthropic `/v1/messages` | 200，`ANTHROPIC_OK` |
+| 图片 data URL | 上游 `Could not process image`（v1 不支持，二期上传） |
+| 签到 campaign | 上游返回当日 `CLAIMED`；派生机器头可拉取活动列表 |
+| qoderwork 回归 | `qwen3.8-max` 200 |
+| 路由冲突 | notion 也暴露 `claude-opus-5-5`；给 qoder 配置 `priority: 200` 后日志稳定 `provider=qoder` |
+
+**上游稳定性（同一 trial 账号实测）：** Ultimate 请求约半数会返回上游 `provider_error`，典型原文：
+- `model "claude-opus-4-6" is not available for this account`
+- `bedrock:InvokeModelWithResponseStream ... explicit deny`
+- `Required egress proxy not available`
+这些错误发生在输出前，插件已如实透出；一次失败会让 CPA 对该 auth 冷却 60 秒。该问题属于 Qoder 上游路由/套餐权益，不是插件透传缺陷；v1 不自动重试，建议使用具备 Ultimate/极致权益的付费账号。
+
 ## 12. 风险与开放问题
 
 | 风险 | 缓解 |
 |---|---|
 | 国际端点无官方文档，可能变动 | 常量集中管理；错误透传上游原文；社区多项目交叉印证 |
 | `ultimate` 背后是否 Claude Opus 5.5 未官方确认 | 插件只做命名映射，不断言来源；命名可随时改 |
-| 账号无 ultimate 权益（免费/低档套餐） | 上游报错如实透出，面板展示 plan |
-| data URL 图片可能被拒 | 实测决定；二期加 COSY 上传 |
+| 账号无 ultimate 权益（免费/低档套餐） | 上游报错如实透出，面板展示 plan；实测 trial 账号约半数请求失败（`claude-opus-4-6 not available` / Bedrock deny / egress proxy），建议付费账号 |
+| data URL 图片可能被拒 | **已实测被拒**（`Could not process image`）；v1 不支持，二期加 COSY 上传 |
 | ZCode 长 tools 载荷（~605KB）可能超上游限制 | 实测；必要时加可配置 tool budget |
 | 签到指纹限制 | 面板提示 + 可选指纹字段 |
-| 与 qoderwork/workbuddy 模型名冲突 | v1 单模型 `claude-opus-5-5` 无冲突 |
+| 与 qoderwork/workbuddy/notion 模型名冲突 | 单模型 `claude-opus-5-5`；给 qoder 插件更高 `priority`，或用 `oauth-model-alias` 增加唯一别名 `qoder-opus` |
 
 ## 13. 验收标准
 
@@ -232,3 +254,5 @@ ZCode / Claude Code
 3. 面板可见积分/plan/签到状态；签到成功后积分快照刷新。
 4. usage 上报与最近请求记录正常；异常请求有明确上游错误，无空 200。
 5. qoderwork 插件行为不受影响（回归：CN 模型仍可调用）。
+
+**2026-10-21 验收状态：** 1/2/4/5 已实测通过（工具往返在非流式链路上完成一次完整往返，流式 tool_calls 增量透传已确认；ZCode 真实任务留给用户在本机做最终体验确认）。3 的上游 campaign/额度已确认（当日 `CLAIMED`、add-on 499），面板按钮因 management key 未在自动化中调用，留待用户点击确认。上游 Ultimate 权益不稳定会在输出前失败并透出原文，属账号/上游问题，需用具备权益的账号复测。
