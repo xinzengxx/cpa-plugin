@@ -100,6 +100,55 @@ func executeChatOnce(sa *storedAuth, requestedModel, upstreamModel string, paylo
 	return completion, status, nil
 }
 
+// refreshForRetry is injectable so tests do not hit the network.
+var refreshForRetry = refreshStoredTokens
+
+func refreshStoredTokens(sa *storedAuth) error {
+	rt := strings.TrimSpace(sa.Auth.RefreshToken)
+	switch {
+	case strings.HasPrefix(rt, "drt-"):
+		tok, err := refreshDeviceToken(rt)
+		if err != nil {
+			return err
+		}
+		sa.Auth.AccessToken = tok.accessToken()
+		sa.Auth.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
+		return nil
+	case strings.HasPrefix(rt, "jrt-"):
+		tok, err := refreshJobToken(rt)
+		if err != nil {
+			return err
+		}
+		sa.Auth.AccessToken = tok.Token
+		sa.Auth.RefreshToken = firstNonEmpty(tok.RefreshToken, rt)
+		return nil
+	case strings.HasPrefix(strings.TrimSpace(sa.Auth.PersonalToken), "pt-"):
+		tok, err := exchangePATForJobToken(sa.Auth.PersonalToken)
+		if err != nil {
+			return err
+		}
+		sa.Auth.AccessToken = tok.Token
+		sa.Auth.RefreshToken = tok.RefreshToken
+		return nil
+	}
+	return fmt.Errorf("no refresh credential")
+}
+
+// executeChatWithRetry retries exactly once on 401/403 after refreshing the
+// credential in memory. Any other status (400/404/429/5xx) is returned as-is
+// without a refresh. A failed refresh surfaces the original upstream error
+// plus the refresh failure.
+func executeChatWithRetry(sa *storedAuth, requestedModel, upstreamModel string, payload []byte) ([]byte, int, error) {
+	completion, status, err := executeChatOnce(sa, requestedModel, upstreamModel, payload)
+	if err == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
+		return completion, status, err
+	}
+	if rerr := refreshForRetry(sa); rerr != nil {
+		return nil, status, fmt.Errorf("%w (refresh failed: %v)", err, rerr)
+	}
+	return executeChatOnce(sa, requestedModel, upstreamModel, payload)
+}
+
 func completionLooksEmpty(completion []byte) bool {
 	var c struct {
 		Choices []struct {

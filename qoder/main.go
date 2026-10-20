@@ -638,7 +638,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, msg)
 		return nil, fmt.Errorf("%s", msg)
 	}
-	completion, status, err := executeChatOnce(sa, req.Model, upstreamModel, req.Payload)
+	completion, status, err := executeChatWithRetry(sa, req.Model, upstreamModel, req.Payload)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, status, err.Error())
 		recordRecentCall(req.AuthID, authUID, sa.Account.Nickname, req.Model, upstreamModel, false, started, usage.Detail{}, qoderCredits{}, true, err.Error())

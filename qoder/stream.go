@@ -380,22 +380,42 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 	if cancel != nil {
 		defer cancel()
 	}
-	httpReq, err := buildChatRequestWithContext(ctx, sa, body, requestID, sessionID)
-	if err != nil {
-		streamEmitError(streamID, err.Error())
-		return
-	}
-	stream, status, _, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, err.Error())
-		streamEmitError(streamID, "http_error: "+err.Error())
-		return
+	var stream *hostHTTPStream
+	var status int
+	var err error
+	// rejectedBody keeps the final 401/403 body: the stream is closed before
+	// the retry decision, so the original upstream error would be lost.
+	var rejectedBody []byte
+	for attempt := 0; attempt < 2; attempt++ {
+		httpReq, rerr := buildChatRequestWithContext(ctx, sa, body, requestID, sessionID)
+		if rerr != nil {
+			streamEmitError(streamID, rerr.Error())
+			return
+		}
+		stream, status, _, err = hostHTTPDoStream(httpReq)
+		if err != nil {
+			publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+			recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, err.Error())
+			streamEmitError(streamID, "http_error: "+err.Error())
+			return
+		}
+		if status != http.StatusUnauthorized && status != http.StatusForbidden {
+			break
+		}
+		rejectedBody, _ = io.ReadAll(newHostStreamReader(stream))
+		stream.Close()
+		if attempt == 0 && refreshForRetry(sa) == nil {
+			continue
+		}
+		break
 	}
 	defer stream.Close()
 	reader := newHostStreamReader(stream)
 	if status >= 400 {
-		raw, _ := io.ReadAll(reader)
+		raw := rejectedBody
+		if len(raw) == 0 {
+			raw, _ = io.ReadAll(reader)
+		}
 		detail := truncateRedacted(string(raw), 300)
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, status, detail)
 		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, detail)
@@ -459,7 +479,19 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 	invalidateAccountCredits(authID, authUID)
 }
 
+// collectUpstreamStream retries the synchronous stream collection exactly once
+// on 401/403 after refreshing the credential in memory.
 func collectUpstreamStream(sa *storedAuth, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+	chunks, status, err := collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
+	if err != nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		if rerr := refreshForRetry(sa); rerr == nil {
+			return collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
+		}
+	}
+	return chunks, status, err
+}
+
+func collectUpstreamStreamOnce(sa *storedAuth, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	req, err := buildChatRequest(sa, body, requestID, sessionID)
 	if err != nil {
 		return nil, 0, err
