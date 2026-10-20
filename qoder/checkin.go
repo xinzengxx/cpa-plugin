@@ -1,7 +1,7 @@
-// checkin.go implements daily check-in for CN accounts: the manual
+// checkin.go implements daily check-in for Qoder Global accounts: the manual
 // handleManualCheckin endpoint, the 10:00 / 21:00 auto scheduler, and the
 // per-account mutex that prevents duplicate check-ins from racing browser
-// tabs. CN accounts are excluded — they use one-shot trial claims instead.
+// tabs.
 package main
 
 import (
@@ -75,8 +75,8 @@ func schedulerLoop(stop chan struct{}) {
 }
 
 // runAutoCheckin is the scheduled lifecycle tick (10:00 / 21:00).
-// CN: optional daily check-in, then reconcile (disable exhausted / reenable after credits).
-// CN: no auto trial (one-shot claim is manual only); reconcile may delete exhausted auths.
+// Global: optional daily check-in, then reconcile (disable exhausted / reenable after credits).
+// Global: no auto trial (one-shot claim is manual only); reconcile only disables exhausted auths.
 //
 // v0.6.31: per-account work runs concurrently (sem=4) — was serial, so N accounts
 // meant 3N serial HTTP round-trips on the billing API. Matches the pattern used
@@ -118,7 +118,7 @@ func processAutoCheckinAccount(f pluginapi.HostAuthFileEntry, doCheckin bool) {
 		if err != nil {
 			return
 		}
-		// CN: daily check-in when enabled.
+		// Global: daily check-in when enabled.
 		ci, err := fetchCheckinStatus(sa)
 		if err == nil && ci != nil && ci.Active && !ci.TodayCheckedIn {
 			if _, callErr := performCheckinCall(sa); callErr == nil {
@@ -170,7 +170,7 @@ func processAutoCheckinAccount(f pluginapi.HostAuthFileEntry, doCheckin bool) {
 
 // handleManualCheckin checks in one account (auth_index) or all qoder
 // accounts. Unlike the workbuddy three-phase classify/execute/summarize flow,
-// QoderWork's checkin is a simple Bearer GET+POST — we run it directly per
+// Qoder Global's checkin is a simple Bearer GET+POST — we run it directly per
 // account under an 8s timeout, no classify stage.
 func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 	t0 := time.Now()

@@ -95,7 +95,7 @@ const (
 	loginTTL = 10 * time.Minute
 )
 
-// loginCtx holds one in-flight device-authorization login flow. QoderWork's
+// loginCtx holds one in-flight device-authorization login flow. Qoder's
 // desktop clients use a PKCE device flow: the plugin generates
 // verifier/challenge + nonce/machine_id, the user authorizes in a browser,
 // and PollLogin exchanges the grant at /api/v1/deviceToken/poll.
@@ -257,7 +257,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	case pluginabi.MethodExecutorExecuteStream:
 		return handleExecStream(request)
 	case pluginabi.MethodExecutorCountTokens:
-		// Upstream QoderWork has no dedicated count_tokens API. Return
+		// Qoder Global has no dedicated count_tokens API. Return
 		// unhandled-style zero estimate so clients fall back / skip.
 		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
 	case pluginabi.MethodManagementRegister:
@@ -325,7 +325,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.8.2"
+var version = "0.1.0"
 
 func wbRegistration() registration {
 	return registration{
@@ -333,15 +333,14 @@ func wbRegistration() registration {
 		Metadata: pluginapi.Metadata{
 			Name:             providerName,
 			Version:          version,
-			Author:           "Sliverkiss (based on qoder by lovingfish)",
+			Author:           "Sliverkiss",
 			GitHubRepository: "https://github.com/Sliverkiss/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for CN accounts (default true)."},
+				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for Global accounts (default true)."},
 				{Name: "checkin_fingerprint", Type: pluginapi.ConfigFieldTypeString, Description: "Optional JSON fingerprint for Global check-in. Required keys: machine_id/machine_token/machine_type; optional: machine_code/hostname/machine_os (defaults: machine_code=machine_id, hostname=os hostname). Incomplete JSON falls back to a derived identity. Fresh Global accounts need the official client to claim once unless this is set."},
-				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN when credits exhausted; re-enable CN after check-in restores credits (default true)."},
+				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable Global accounts when credits are exhausted; re-enable them after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning."},
 				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
 				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
@@ -360,18 +359,6 @@ func wbRegistration() registration {
 			UsagePlugin:           true,
 		},
 	}
-}
-
-// dynamicModelsCacheTTL bounds how long a fetched model list is reused.
-// model.static / model.for_auth are re-invoked by CPA on every config reload
-// and on each models query; without caching, every reload fans out to one
-// upstream call per account.
-const dynamicModelsCacheTTL = 5 * time.Minute
-
-var dynamicModelsCache struct {
-	sync.RWMutex
-	models  []pluginapi.ModelInfo
-	fetched time.Time
 }
 
 //
@@ -405,40 +392,6 @@ var modelAliasCache struct {
 // config → env → docker secret files (see resolveUsageReport).
 // usage.Detail is still used as a pure token-counter struct.
 
-func hostAuthListFiles() ([]pluginapi.HostAuthFileEntry, error) {
-	raw, err := hostCall(pluginabi.MethodHostAuthList, nil)
-	if err != nil {
-		return nil, err
-	}
-	var env envelope
-	if err := json.Unmarshal(raw, &env); err != nil || !env.OK {
-		return nil, fmt.Errorf("host.auth.list failed")
-	}
-	var resp rpcHostAuthListResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Files, nil
-}
-
-// hostAuthGetByIndex fetches the raw JSON for one auth index.
-func hostAuthGetByIndex(authIndex string) ([]byte, error) {
-	body, _ := json.Marshal(map[string]string{"auth_index": authIndex})
-	raw, err := hostCall(pluginabi.MethodHostAuthGet, body)
-	if err != nil {
-		return nil, err
-	}
-	var env envelope
-	if err := json.Unmarshal(raw, &env); err != nil || !env.OK {
-		return nil, fmt.Errorf("host.auth.get failed")
-	}
-	var resp rpcHostAuthGetResponse
-	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		return nil, err
-	}
-	return resp.JSON, nil
-}
-
 // storedAuth is the on-disk shape of a qoder credential.
 type storedAuth struct {
 	Auth    storedTokens  `json:"auth"`
@@ -467,7 +420,7 @@ type storedAccount struct {
 	Nickname     string `json:"nickname"`
 }
 
-// apiEnvelope is the generic {code,msg,data} wrapper used by every QoderWork API.
+// apiEnvelope is the generic {code,msg,data} wrapper used by the Qoder API.
 type apiEnvelope struct {
 	Code int             `json:"code"`
 	Msg  string          `json:"msg"`
@@ -476,7 +429,7 @@ type apiEnvelope struct {
 
 // jobTokenResponse is defined in oauth.go; keepalive and handleRefreshAuth
 // both use it. The old tokenData struct (camelCase tags) was wrong and has
-// been removed — QoderWork returns snake_case JSON.
+// been removed — Qoder returns snake_case JSON.
 
 func parseStored(raw []byte) (*storedAuth, error) {
 	if len(raw) == 0 {

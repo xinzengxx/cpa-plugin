@@ -1,19 +1,18 @@
-// oauth.go implements QoderWork's auth flows. Two entry points, one outcome:
+// oauth.go implements Qoder Global's auth flows. Two entry points, one outcome:
 //
 //  1. PAT import (management panel): user pastes a PAT (`pt-...`) created on
 //     qoder.com; the plugin exchanges it for a jobToken pair (jt-/jrt-)
 //     and stores both.
 //
-//  2. OAuth-like flow (AuthProvider.StartLogin): QoderWork has no real
-//     OAuth authorization-code flow — its web login is Aliyun SSO SMS →
-//     web session cookie → manual PAT creation. So handleStartLogin returns
-//     the PAT-creation page URL; the user creates a PAT in their browser
-//     and pastes it back. handlePollLogin accepts the pasted PAT and runs
-//     the same exchange as path 1.
+//  2. Device authorization (AuthProvider.StartLogin): the plugin builds a
+//     qoder.com/device/selectAccounts URL with a PKCE challenge; the user
+//     authorizes in a browser and PollLogin polls /api/v1/deviceToken/poll
+//     for a dt-/drt- grant (no PAT required).
 //
-// Refresh uses jrt- (48h TTL) to get a fresh jt- (24h TTL). When jrt-
-// expires, the underlying PAT is still valid — we fall back to a fresh
-// exchange using the stored PAT.
+// Refresh uses jrt- (48h TTL) for a fresh jt- (24h TTL) on PAT sessions, or
+// drt- (~1y) to rotate dt- on device sessions. When jrt- expires, the
+// underlying PAT is still valid — we fall back to a fresh exchange using the
+// stored PAT.
 package main
 
 import (
@@ -163,7 +162,7 @@ func buildStoredAuthFromJobToken(pat string, tok *jobTokenResponse, ui *userInfo
 	}
 
 	// PersonalToken is stored inside RefreshToken only when refresh is via PAT
-	// (no jrt available). For QoderWork we have a real jrt- (refresh token),
+	// (no jrt available). For Qoder Global we have a real jrt- (refresh token),
 	// so RefreshToken carries the jrt- and the PAT itself is kept in Domain
 	// alongside the realm for later re-exchange when jrt- expires (48h).
 	return &storedAuth{
@@ -191,15 +190,16 @@ func uiUserType(ui *userInfoResponse) string {
 // -----------------------------------------------------------------------------
 // Device-authorization login (real OAuth — no PAT required)
 //
-// Reverse-engineered from the official QoderWork CN desktop client
-// (/tmp/qw_extract .../main.js) and proven live against the Global realm by
+// Reverse-engineered from the official Qoder desktop client main.js and
+// proven live against the Global realm by
 // /root/qoder-register/qoder_device_oauth.py (2026-07-22, issued dt-/drt-
-// tokens). CN realm constants from the same main.js:
+// tokens). Global realm constants:
 //
-//	WEBSITE_DOMAIN  = qoder.com        (auth pages)
-//	OPENAPI_DOMAIN  = openapi.qoder.com (token endpoints)
-//	CLIENT_ID prod  = 1c5e33e1-364d-4ce6-b02c-acaa81274a5c (shared with Global)
-//	REDIRECT_URI    = qoder-work-cn://
+//	WEBSITE_DOMAIN  = qoder.com         (auth pages)
+//	OPENAPI_DOMAIN  = openapi.qoder.sh  (token endpoints)
+//	CLIENT_ID prod  = e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb
+//	REDIRECT_URI    = none (device flow polls; no redirect handler)
+//	NONCE           = 32 hex chars (UUID without dashes)
 //
 // Flow: StartLogin builds the /device/selectAccounts URL with a PKCE
 // challenge; the user authorizes in their browser; PollLogin polls
@@ -424,7 +424,7 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 
 	return okEnvelope(pluginapi.AuthLoginPollResponse{
 		Status:  pluginapi.AuthLoginStatusPending,
-		Message: "等待浏览器完成 QoderWork 设备授权",
+		Message: "等待浏览器完成 Qoder Global 设备授权",
 	})
 }
 

@@ -19,7 +19,7 @@ type wbAccount struct {
 	Label     string          `json:"label"`
 	Nickname  string          `json:"nickname"`
 	UID       string          `json:"uid"`
-	Region    string          `json:"region"` // "cn" or "global"
+	Region    string          `json:"region"` // always "global" (single-region provider)
 	Plan      string          `json:"plan"`
 	Status    string          `json:"status"`
 	Disabled  bool            `json:"disabled"`
@@ -94,7 +94,7 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 			}
 			acct.Nickname = sa.Account.Nickname
 			acct.UID = sa.Account.UID
-			acct.Region = "cn"
+			acct.Region = "global"
 			if fetchCredits {
 				plan, ci, cr, errs := cachedAccountDetails(f.ID, sa, force)
 				acct.Plan = plan
@@ -123,7 +123,7 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 	var life []map[string]any
 	if force && lifecycleEnabled() {
 		life = reconcileAllAccounts(true)
-		// Drop accounts deleted during reconcile (CN exhaust) and refresh
+		// Drop accounts deleted during reconcile (credit exhaustion) and refresh
 		// disabled/exhausted from disk/cache (host list may lag after save).
 		if files2, err2 := hostAuthList(); err2 == nil {
 			live := make(map[string]struct{}, len(files2))
@@ -189,8 +189,10 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 }
 
 // summarizeCredits aggregates remain/used across dashboard accounts.
+// Qoder Global is single-region, so every account contributes to the global
+// bucket.
 func summarizeCredits(accounts []wbAccount) map[string]any {
-	var remain, used, size, cnRemain, cnUsed, cnSize, glRemain, glUsed, glSize int64
+	var remain, used, size, glRemain, glUsed, glSize int64
 	var known, disabledN, exhaustedN, packs int
 	for _, a := range accounts {
 		if a.Disabled {
@@ -211,15 +213,9 @@ func summarizeCredits(accounts []wbAccount) map[string]any {
 		used += cr.TotalUsed
 		size += cr.TotalSize
 		packs += cr.PackCount
-		if a.Region == "global" {
-			glRemain += cr.TotalRemain
-			glUsed += cr.TotalUsed
-			glSize += cr.TotalSize
-		} else {
-			cnRemain += cr.TotalRemain
-			cnUsed += cr.TotalUsed
-			cnSize += cr.TotalSize
-		}
+		glRemain += cr.TotalRemain
+		glUsed += cr.TotalUsed
+		glSize += cr.TotalSize
 	}
 	total := remain + used
 	if size > total {
@@ -235,9 +231,6 @@ func summarizeCredits(accounts []wbAccount) map[string]any {
 		"total_used":      used,
 		"total_size":      size,
 		"total":           total,
-		"cn_remain":       cnRemain,
-		"cn_used":         cnUsed,
-		"cn_size":         cnSize,
 		"global_remain":   glRemain,
 		"global_used":     glUsed,
 		"global_size":     glSize,

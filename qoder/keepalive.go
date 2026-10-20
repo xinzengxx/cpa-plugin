@@ -278,7 +278,7 @@ func runTokenKeepalive() *keepaliveSummary {
 			// but the row should be populated even when refresh errors early.
 			if sa, err := hostAuthGet(f.AuthIndex); err == nil {
 				row.Nickname = sa.Account.Nickname
-				row.Region = "cn"
+				row.Region = "global"
 			}
 			status, err := refreshOneAuth(f.AuthIndex, f.ID)
 			row.Status = status
@@ -326,7 +326,7 @@ func handleKeepaliveNow(req pluginapi.ManagementRequest) map[string]any {
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
-	row := keepaliveRow{AuthIndex: authIndex, Nickname: sa.Account.Nickname, Region: "cn"}
+	row := keepaliveRow{AuthIndex: authIndex, Nickname: sa.Account.Nickname, Region: "global"}
 	row.Status, err = refreshOneAuth(authIndex, "")
 	if err != nil {
 		row.Detail = truncateRedacted(err.Error(), 200)

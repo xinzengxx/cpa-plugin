@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>QoderWork 面板</title>
+<title>Qoder Global 面板</title>
 <style>
 /* Theme tokens aligned with CPA management panel (key-policy / themes.scss):
    default :root = light (paper); data-theme=white | dark; embedded iframe syncs parent. */
@@ -59,8 +59,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.exhausted{background:var(--err-soft);color:var(--err);border:1px solid var(--err-border)}
 .badge.pro{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
-.badge.cn{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
-.badge.global{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
+.badge.global{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.disabled{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
@@ -171,8 +170,8 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 </head>
 <body>
 <div class="wrap">
-  <h1>QoderWork 账号面板</h1>
-  <div class="sub">积分余额 · CN 每日签到（10:00/21:00）· 最近 20 条请求 · 耗尽自动关</div>
+  <h1>Qoder Global 账号面板</h1>
+  <div class="sub">积分余额 · Global 每日签到（10:00/21:00）· 最近 20 条请求 · 耗尽自动关</div>
   <div id="authBox" class="card" style="display:none;margin-bottom:16px">
     <div style="margin-bottom:8px;color:var(--mut)">需要管理密钥（management key）才能访问账号数据。从 CPA 主面板嵌入时会自动获取，无需输入。错误密钥请勿连点，避免 IP 封禁。</div>
     <div style="display:flex;gap:8px">
@@ -181,16 +180,16 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
   </div>
   <div class="bar">
-    <button class="sec" id="importBtn" onclick="openImportModal()">导入 QoderWork 凭证</button>
+    <button class="sec" id="importBtn" onclick="openImportModal()">导入 Qoder Global 凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
     
-    <label class="toggle" title="仅 CN 账号 10:00 / 21:00"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到(CN)</label>
+    <label class="toggle" title="仅 Global 账号 10:00 / 21:00"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到(Global)</label>
     <span class="toggle" id="svtime"></span>
   </div>
   <div class="filter-bar" id="filterBar">
     <button type="button" class="ftag active" data-region="all" onclick="filterRegion('all',this)">全部 <span class="cnt" id="cntAll">0</span></button>
-    <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">CN <span class="cnt" id="cntCn">0</span></button>
+    <button type="button" class="ftag" data-region="global" onclick="filterRegion('global',this)">Global <span class="cnt" id="cntGlobal">0</span></button>
     
     <button type="button" class="ftag" data-region="exhausted" onclick="filterRegion('exhausted',this)">耗尽 <span class="cnt" id="cntExhausted">0</span></button>
   </div>
@@ -224,11 +223,11 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 <div class="modal-mask" id="importModal" onclick="onImportMaskClick(event)">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
     <div class="modal-hd">
-      <h2 id="importModalTitle">导入 QoderWork 凭证</h2>
+      <h2 id="importModalTitle">导入 Qoder Global 凭证</h2>
       <button type="button" class="modal-x" onclick="closeImportModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">到 <a href="https://qoder.com.cn/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com.cn → 设置 → Personal Access Tokens</a> 创建一个 PAT（pt- 开头），粘贴到下方。插件会自动换取 jobToken 并保存为 <code>qoder-&lt;uid&gt;.json</code>。</p>
+      <p class="hint">到 <a href="https://qoder.com/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com → 设置 → Personal Access Tokens</a> 创建一个 PAT（pt- 开头），粘贴到下方。插件会自动换取 jobToken 并保存为 <code>qoder-&lt;uid&gt;.json</code>。</p>
       <input id="importPAT" type="password" placeholder="pt-xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;padding:8px 10px;font-family:ui-monospace,monospace;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);"/>
       <p class="hint" style="margin-top:8px;opacity:0.7">PAT 长期有效（可在创建时设置过期时间）。插件存储 PAT 用于 jrt- 过期后自动续期，无需重新导入。</p>
     </div>
@@ -351,12 +350,12 @@ function card(a){
   const plan=(a.plan||"unknown").toLowerCase();
   const ci=a.checkin||{}, cr=a.credits;
   const exhausted=!!a.exhausted||(!!cr&&(cr.total_remain||0)===0&&((cr.total_used||0)>0||(cr.total_size||0)>0||(cr.packages&&cr.packages.length)));
-  const region=a.region||"cn";
+  const region=a.region||"global";
   
   const disabled=!!a.disabled;
   const selected=!!a.selected;
-  const regionBadge=`<span class="badge cn">CN</span>`;
-  // CN: 签到 button + 领取Pro button
+  const regionBadge=`<span class="badge global">Global</span>`;
+  // Global: 签到 button + 领取Pro button
   // active=false means the upstream check-in activity is not enabled for
   // this account (e.g. Community plan). Show disabled button with '?'.
   let actionHTML;
@@ -474,7 +473,7 @@ function filterRegion(region, btn){
     });
   }
   document.querySelectorAll("#grid .card").forEach(c=>{
-    const r=c.dataset.region||"cn";
+    const r=c.dataset.region||"global";
     let show=true;
     if(currentFilter==="all") show=true;
     else if(currentFilter==="exhausted") show=c.querySelector(".badge.exhausted")!=null;
@@ -484,16 +483,16 @@ function filterRegion(region, btn){
   renderSummary(lastAccounts);
 }
 function updateFilterCounts(accounts){
-  let cn=0, ex=0;
+  let globalN=0, ex=0;
   (accounts||[]).forEach(a=>{
-    cn++;
+    globalN++;
     if(a.exhausted||(a.credits&&a.credits.total_remain===0&&(a.credits.total_used>0||(a.credits.packages&&a.credits.packages.length)))) ex++;
   });
   const elAll=document.getElementById("cntAll");
-  const elCn=document.getElementById("cntCn");
+  const elGlobal=document.getElementById("cntGlobal");
   const elEx=document.getElementById("cntExhausted");
   if(elAll) elAll.textContent=String((accounts||[]).length);
-  if(elCn) elCn.textContent=String(cn);
+  if(elGlobal) elGlobal.textContent=String(globalN);
   if(elEx) elEx.textContent=String(ex);
 }
 function accountsForFilter(accounts){
@@ -502,7 +501,7 @@ function accountsForFilter(accounts){
   if(currentFilter==="exhausted"){
     return list.filter(a=>a.exhausted||(a.credits&&a.credits.total_remain===0&&(a.credits.total_used>0||(a.credits.packages&&a.credits.packages.length))));
   }
-  return list.filter(a=>(a.region||"cn")===currentFilter);
+  return list.filter(a=>(a.region||"global")===currentFilter);
 }
 function creditOf(a){
   const cr=a&&a.credits;
@@ -525,7 +524,7 @@ function renderSummary(accounts){
   }
   const scoped=accountsForFilter(all);
   let remain=0, used=0, size=0, knownN=0, disabledN=0, exhaustedN=0;
-  let cnRemain=0, cnUsed=0;
+  let glRemain=0, glUsed=0;
   scoped.forEach(a=>{
     const c=creditOf(a);
     if(c.known){ remain+=c.remain; used+=c.used; size+=c.size; knownN++; }
@@ -538,7 +537,7 @@ function renderSummary(accounts){
     if(!c.known) return;
     allRemain+=c.remain; allUsed+=c.used; allSize+=c.size;
     
-    cnRemain+=c.remain; cnUsed+=c.used;
+    glRemain+=c.remain; glUsed+=c.used;
   });
   const total=size>0?size:(remain+used);
   const pct=total>0?Math.round(used/total*100):0;
@@ -563,7 +562,7 @@ function renderSummary(accounts){
       <div class="pb-meta">可用 ${remain} · 已用 ${used} · 池 ${total||0}（签到加包会抬高池和可用，不等于没消耗）</div>
     </div>
     ${currentFilter==="all"?`
-    <div class="pb-meta" style="margin-top:10px">CN 可用 ${cnRemain} / 已用 ${cnUsed}</div>
+    <div class="pb-meta" style="margin-top:10px">Global 可用 ${glRemain} / 已用 ${glUsed}</div>
     `:`
     <div class="pb-meta" style="margin-top:10px">全部账号池：可用 ${allRemain} · 已用 ${allUsed} · 池 ${allTotal||0}</div>
     `}
@@ -695,9 +694,9 @@ async function load(force, btn){
     activeAuthId=d.active_auth||"";
     updateFilterCounts(accounts);
     if(!accounts.length){
-      g.innerHTML='<div class="loading">暂无 QoderWork 账号</div>';
+      g.innerHTML='<div class="loading">暂无 Qoder Global 账号</div>';
       renderSummary([]);
-      if(force) toast("数据已刷新", "warn", "暂无 QoderWork 账号");
+      if(force) toast("数据已刷新", "warn", "暂无 Qoder Global 账号");
       return;
     }
     g.innerHTML=accounts.map(card).join("");
@@ -731,10 +730,8 @@ function checkinResultToast(res, who){
   const msg=(typeof res.message==="string")?res.message:(res.message?JSON.stringify(res.message):"");
   if(res.error){toast(name+"：签到失败","err",typeof res.error==="string"?res.error:JSON.stringify(res.error));return}
   if(res.inactive||res.reason==="inactive"){
-    toast(name+"：活动未开放","warn",msg||"当前账号无可用签到活动");return;
-  }
-  if(res.reason==="global"||(/国际版|不支持/.test(msg))){
-    toast(name+"：国际版无需签到","warn",msg||"请用领取专家加油包");return;
+    // Backend message wins; the long hint is only a last-resort fallback.
+    toast(name+"：活动未开放","warn",msg||"当前账号无可用签到活动（国际版新号请先在官方 Qoder 客户端领取一次）");return;
   }
   if(res.reason==="already"||(res.skipped&&/already|已签|今日|已领/.test(msg))){
     toast(name+"：今日已签到","ok",msg||"");return;
@@ -748,11 +745,10 @@ function checkinResultToast(res, who){
 }
 function isCheckinDoneResult(res){
   if(!res||res.error) return false;
-  if(res.reason==="global") return false;
   if(res.success) return true;
   const msg=String(res.message||"");
   // already checked in today (backend) — treat as done, not failure
-  if(/already|已签|今日/.test(msg) && !/国际版|不支持/.test(msg)) return true;
+  if(/already|已签|今日/.test(msg)) return true;
   return false;
 }
 async function checkin(idx, btn){
@@ -805,7 +801,7 @@ async function selectAuth(idx, btn){
     }
     activeAuthId=d.active_auth||idx;
     const who=d.nickname||idx;
-    const region="CN";
+    const region="Global";
     toast("已选用","ok",who+" · "+region);
     // Re-render from local state for instant feedback, then soft reload
     (lastAccounts||[]).forEach(a=>{a.selected=(a.auth_index===activeAuthId);});
@@ -852,7 +848,7 @@ async function refreshCredits(idx, btn){
 async function checkinAll(btn){
   busy(btn,true);
   try{
-    // Backend prefilters: already-checked skipped; only CN-need-checkin run.
+    // Backend prefilters: already-checked skipped; only Global accounts needing check-in run.
     const d=await api("/checkin",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
     const rs=d.results||[];
     const s=d.summary||{};
@@ -860,7 +856,6 @@ async function checkinAll(btn){
     const already=Number(s.already??rs.filter(x=>x.reason==="already"||x.skipped).length)||0;
     const inactive=Number(s.inactive??rs.filter(x=>x.inactive).length)||0;
     const fail=Number(s.fail??rs.filter(x=>x.error||(x.success===false&&!x.skipped&&!x.inactive)).length)||0;
-    const skippedCN=Number(s.skipped_cn||0);
     const eligible=Number(s.eligible??(ok+fail))||0;
     const detailParts=[];
     
@@ -879,17 +874,17 @@ async function checkinAll(btn){
       toast("批量签到："+ok+" 成功"+(already?" / "+already+" 今日已签":""),"ok",detail);
     }else if(inactive){
       toast("活动未开放","warn",detail);
-    }else if(already||skippedCN){
-      toast("无需签到","ok",detail||"CN 今日已签");
+    }else if(already){
+      toast("无需签到","ok",detail||"今日已签");
     }else if(!rs.length && !eligible){
-      toast("没有需要签到的 CN 账号","warn",detail||"");
+      toast("没有需要签到的账号","warn",detail||"");
     }else{
       toast("没有需要签到的账号","warn",detail);
     }
-    // Mark CN check-in buttons done immediately when any success/already
+    // Mark Global check-in buttons done immediately when any success/already
     if(ok||already){
       document.querySelectorAll("#grid .card").forEach(c=>{
-        if((c.dataset.region||"cn")==="cn"){
+        if((c.dataset.region||"global")==="global"){
           const b=c.querySelector('[data-action="checkin"]');
           if(b && /签到|处理中/.test(b.textContent||"")) markCheckinDone(b);
         }

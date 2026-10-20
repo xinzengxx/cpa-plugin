@@ -1,6 +1,6 @@
 // policy.go is the pure decision layer for credit-driven lifecycle actions:
 // given an account's region and current credits, decide whether to disable
-// CN: disable when exhausted, re-enable after check-in restores credits, or
+// it: disable when exhausted, re-enable after check-in restores credits, or
 // leave it alone. No I/O happens here — reconcileOneAccount consumes these
 // decisions and applies them via the lifecycle.go authfile helpers.
 package main
@@ -113,17 +113,17 @@ func isSoftRateLimit(status int, body string) bool {
 }
 
 // lifecycleActionFor chooses disable/none from credits.
-// QoderWork is CN-only — disable (not delete) so check-in can restore credits
-// without forcing the user to re-import a PAT.
-func lifecycleActionFor(region string, cr *creditsSummary) lifecycleAction {
+// Qoder Global is single-region — disable (not delete) so check-in can restore
+// credits without forcing the user to re-import a PAT.
+func lifecycleActionFor(cr *creditsSummary) lifecycleAction {
 	if !shouldActOnCredits(cr) {
 		return lifecycleNone
 	}
 	return lifecycleDisable
 }
 
-// shouldReenableCN is true when a CN account is disabled but now has credits.
-func shouldReenableCN(disabled bool, cr *creditsSummary) bool {
+// shouldReenable is true when a disabled account now has credits.
+func shouldReenable(disabled bool, cr *creditsSummary) bool {
 	if !disabled {
 		return false
 	}
@@ -139,13 +139,7 @@ func shouldReenableCN(disabled bool, cr *creditsSummary) bool {
 
 // displayNote builds a one-line note for CPAMP Auth cards.
 func displayNote(sa *storedAuth, cr *creditsSummary, disabled bool) string {
-	region := strings.ToUpper("cn")
-	if region == "CN" {
-		region = "CN"
-	} else {
-		region = "CN"
-	}
-	parts := []string{region}
+	parts := []string{"Global"}
 	if disabled {
 		parts = append(parts, "已禁用")
 	}
@@ -170,15 +164,11 @@ func displayNote(sa *storedAuth, cr *creditsSummary, disabled bool) string {
 	return note
 }
 
-// labelForAuth adds [CN] for host labels.
+// labelForAuth adds [Global] for host labels.
 func labelForAuth(sa *storedAuth) string {
-	base := "QoderWork"
+	base := "Qoder"
 	if sa != nil && strings.TrimSpace(sa.Account.Nickname) != "" {
 		base = strings.TrimSpace(sa.Account.Nickname)
 	}
-	tag := "CN"
-	if "cn" == "global" {
-		tag = "CN"
-	}
-	return base + " [" + tag + "]"
+	return base + " [Global]"
 }

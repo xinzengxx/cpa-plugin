@@ -1,9 +1,8 @@
 // lifecycle.go implements credit-based auth lifecycle for qoder:
-//   - CN exhausted  → disable auth file (disabled:true), re-enable after check-in when credits return
-//   - exhausted → delete auth file (one-shot quota)
+//   - Exhausted → disable auth file (disabled:true), re-enable after check-in restores credits
 //   - Unknown credits → no-op (never mis-kill)
 //   - Hard credit errors from executor → recheck credits then apply policy
-//   - Soft rate limits → do not delete CN
+//   - Soft rate limits → do not disable
 package main
 
 import (
@@ -68,7 +67,7 @@ func pruneLifecycleState() {
 	})
 }
 
-// disableAuth writes disabled:true for a CN (or fallback) account.
+// disableAuth writes disabled:true for a Global (or fallback) account.
 func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string) error {
 	mu := checkinLockFor(authIndex)
 	mu.Lock()
@@ -110,13 +109,13 @@ func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, r
 	return nil
 }
 
-// reenableAuth writes disabled:false when CN has credits again.
+// reenableAuth writes disabled:false when the account has credits again.
 func reenableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary) error {
 	mu := checkinLockFor(authIndex)
 	mu.Lock()
 	defer mu.Unlock()
 
-	if !shouldReenableCN(true, cr) {
+	if !shouldReenable(true, cr) {
 		return nil
 	}
 	note := displayNote(sa, cr, false)
@@ -222,12 +221,12 @@ func peerAuthDir() string {
 	return ""
 }
 
-// applyExhaustedPolicy applies disable (CN) or delete (CN).
+// applyExhaustedPolicy disables an account whose credits are exhausted.
 func applyExhaustedPolicy(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string) error {
 	if !lifecycleEnabled() {
 		return nil
 	}
-	action := lifecycleActionFor("cn", cr)
+	action := lifecycleActionFor(cr)
 	switch action {
 	case lifecycleDisable:
 		return disableAuth(authIndex, authID, sa, cr, reason)
@@ -315,8 +314,7 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 		}
 	}
 
-	region := "cn"
-	if region == "cn" && disabled {
+	if disabled {
 		// Don't re-enable accounts marked session-dead by keepalive.
 		// The credits snapshot may still look healthy, but the session
 		// was revoked server-side — re-enabling would cause 401 storms.
@@ -329,7 +327,7 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 				return lifecycleNone, nil
 			}
 		}
-		if shouldReenableCN(true, cr) {
+		if shouldReenable(true, cr) {
 			if err := reenableAuth(authIndex, authID, sa, cr); err != nil {
 				return lifecycleReenable, err
 			}
@@ -340,7 +338,7 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 		return lifecycleNone, nil
 	}
 
-	act := lifecycleActionFor(region, cr)
+	act := lifecycleActionFor(cr)
 	switch act {
 	case lifecycleDisable:
 		return lifecycleDisable, disableAuth(authIndex, authID, sa, cr, "耗尽")

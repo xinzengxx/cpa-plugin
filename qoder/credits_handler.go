@@ -14,7 +14,7 @@ import (
 
 // handleImportPAT accepts a raw PAT string (pt-...), exchanges it for a
 // jobToken pair, fetches userinfo, and persists via host.auth.save.
-// This is the primary onboarding path for QoderWork — PATs are created on
+// This is the primary onboarding path for Qoder Global — PATs are created on
 // qoder.com by the user and pasted into the panel.
 func handleImportPAT(req pluginapi.ManagementRequest) map[string]any {
 	var body struct {
@@ -88,7 +88,7 @@ func handleCheckinConfig(req pluginapi.ManagementRequest) map[string]any {
 }
 
 // handleSelectAuth sets the panel-selected account used for chat routing.
-// Region is always CN for QoderWork.
+// Qoder Global is single-region: every account reports region "global".
 func handleSelectAuth(req pluginapi.ManagementRequest) map[string]any {
 	var body struct {
 		AuthIndex string `json:"auth_index"`
@@ -117,7 +117,7 @@ func handleSelectAuth(req pluginapi.ManagementRequest) map[string]any {
 		return map[string]any{
 			"ok":          true,
 			"active_auth": f.ID,
-			"region":      "cn",
+			"region":      "global",
 			"nickname":    sa.Account.Nickname,
 			"uid":         sa.Account.UID,
 		}
@@ -156,7 +156,7 @@ func handleCreditsQuery(req pluginapi.ManagementRequest) map[string]any {
 				"auth_index": authIndex,
 				"nickname":   sa.Account.Nickname,
 				"uid":        sa.Account.UID,
-				"region":     "cn",
+				"region":     "global",
 				"name":       f.Name,
 				"label":      f.Label,
 				"disabled":   f.Disabled,

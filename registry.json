@@ -36,6 +36,18 @@
         "Qoder",
         "Management"
       ]
+    },
+    {
+      "id": "qoder",
+      "name": "Qoder Global",
+      "description": "Qoder Global (qoder.com) provider for CLIProxyAPI: OAuth/PAT login, OpenAI-compatible pass-through executor exposing claude-opus-5-5 (upstream ultimate), campaign check-in with optional fingerprint, credits panel, token keepalive.",
+      "author": "Sliverkiss",
+      "version": "0.1.0",
+      "repository": "https://github.com/Sliverkiss/cpa-plugin",
+      "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png",
+      "homepage": "https://github.com/Sliverkiss/cpa-plugin/tree/main/qoder",
+      "license": "MIT",
+      "tags": ["Provider", "OAuth", "Qoder", "Global", "Management"]
     }
   ]
 }

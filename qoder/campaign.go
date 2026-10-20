@@ -1,5 +1,5 @@
-// campaign.go implements Qoder's reward campaign flow for CN and Global
-// accounts. The app no longer uses /sash/api/v1/me/daily-check-in/* for the
+// campaign.go implements Qoder's reward campaign flow for Global accounts.
+// The app no longer uses /sash/api/v1/me/daily-check-in/* for the
 // daily +100 credits; it reads /sash/api/v1/me/campaigns and claims
 // CLAIM_BENEFIT campaigns via POST /sash/api/v1/me/campaigns/{campaignId}/claim.
 package main

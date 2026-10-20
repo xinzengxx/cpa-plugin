@@ -1,6 +1,6 @@
-// active_auth.go tracks the panel-selected QoderWork account used for routing.
+// active_auth.go tracks the panel-selected Qoder Global account used for routing.
 //
-// Region is always CN for QoderWork —
+// Region is always Global for this provider —
 // no per-request JWT iss decode. Default: first available candidate. When the
 // active account is exhausted/disabled/missing, randomly switch to another
 // non-exhausted candidate and remember the choice.
