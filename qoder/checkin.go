@@ -291,7 +291,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		out["skipped"] = true
 		out["inactive"] = true
 		out["reason"] = "inactive"
-		out["message"] = "当前账号无可用签到活动"
+		out["message"] = noCampaignMessage
 		out["activity_name"] = ci.ActivityName
 		return out
 	}
@@ -307,7 +307,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		out["skipped"] = true
 		out["inactive"] = true
 		out["reason"] = "inactive"
-		out["message"] = "当前账号无可用签到活动"
+		out["message"] = noCampaignMessage
 		return out
 	}
 	if result, _ := res["result"].(string); result == "ALREADY_CLAIMED" {

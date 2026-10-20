@@ -1,7 +1,7 @@
-// campaign.go implements Qoder CN's current reward campaign flow. The app no
-// longer uses /sash/api/v1/me/daily-check-in/* for the daily +100 credits;
-// it reads /sash/api/v1/me/campaigns and claims CLAIM_BENEFIT campaigns via
-// POST /sash/api/v1/me/campaigns/{campaignId}/claim.
+// campaign.go implements Qoder's reward campaign flow for CN and Global
+// accounts. The app no longer uses /sash/api/v1/me/daily-check-in/* for the
+// daily +100 credits; it reads /sash/api/v1/me/campaigns and claims
+// CLAIM_BENEFIT campaigns via POST /sash/api/v1/me/campaigns/{campaignId}/claim.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -23,6 +24,11 @@ const (
 	campaignClientType = "10"
 	campaignVersion    = "0.4.8"
 	campaignUserAgent  = "Qoder"
+
+	// noCampaignMessage is the single "nothing to claim" hint surfaced by the
+	// check-in status/claim paths and as the activity label when no campaign
+	// is visible. Fresh Global accounts need one official-client claim first.
+	noCampaignMessage = "当前账号无可用签到活动（国际版新号请先在官方 Qoder 客户端领取一次）"
 )
 
 type campaignContent struct {
@@ -76,8 +82,10 @@ func campaignMachineOS() string {
 // campaignHeaders mirrors the Qoder desktop client's campaign request: plain
 // Bearer auth plus client type/version and machine headers. A configured
 // fingerprint (checkin_fingerprint) wins; otherwise a stable per-account
-// identity is derived from the UID. Global accounts may see no CLAIMABLE
-// campaign until the official client has claimed once.
+// identity is derived from the UID. MachineCode falls back to MachineId and
+// the hostname comes from the configured fingerprint or os.Hostname().
+// Global accounts may see no CLAIMABLE campaign until the official client
+// has claimed once.
 func campaignHeaders(req *http.Request, sa *storedAuth) error {
 	req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
 	req.Header.Set("Accept", "application/json")
@@ -87,25 +95,33 @@ func campaignHeaders(req *http.Request, sa *storedAuth) error {
 	req.Header.Set("Cosy-Version", campaignVersion)
 	req.Header.Set("Cosy-MachineOS", campaignMachineOS())
 
+	machineID := deriveMachineID(sa.Account.UID)
+	machineToken := deriveMachineToken(sa.Account.UID)
+	machineType := deriveMachineType(sa.Account.UID)
+	machineCode := ""
+	hostname := ""
 	if fp := configuredFingerprint(); fp != nil {
-		req.Header.Set("Cosy-MachineId", fp.MachineID)
-		req.Header.Set("Cosy-MachineToken", fp.MachineToken)
-		req.Header.Set("Cosy-MachineType", fp.MachineType)
-		if fp.MachineCode != "" {
-			req.Header.Set("Cosy-MachineCode", fp.MachineCode)
-		}
-		if fp.Hostname != "" {
-			req.Header.Set("Cosy-MachineHostname", fp.Hostname)
-		}
+		machineID = fp.MachineID
+		machineToken = fp.MachineToken
+		machineType = fp.MachineType
+		machineCode = fp.MachineCode
+		hostname = fp.Hostname
 		if fp.MachineOS != "" {
 			req.Header.Set("Cosy-MachineOS", fp.MachineOS)
 		}
-	} else {
-		id := deriveMachineID(sa.Account.UID)
-		req.Header.Set("Cosy-MachineId", id)
-		req.Header.Set("Cosy-MachineToken", deriveMachineToken(sa.Account.UID))
-		req.Header.Set("Cosy-MachineType", deriveMachineType(sa.Account.UID))
-		req.Header.Set("Cosy-MachineCode", id)
+	}
+	if machineCode == "" {
+		machineCode = machineID
+	}
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+	req.Header.Set("Cosy-MachineId", machineID)
+	req.Header.Set("Cosy-MachineToken", machineToken)
+	req.Header.Set("Cosy-MachineType", machineType)
+	req.Header.Set("Cosy-MachineCode", machineCode)
+	if hostname != "" {
+		req.Header.Set("Cosy-MachineHostname", hostname)
 	}
 	return nil
 }
@@ -236,7 +252,7 @@ func campaignSummaryFromList(list *campaignList, now time.Time) *checkinSummary 
 	if state == "" {
 		return &checkinSummary{
 			Active:       false,
-			ActivityName: "当前账号无可用签到活动",
+			ActivityName: noCampaignMessage,
 		}
 	}
 	sum := &checkinSummary{

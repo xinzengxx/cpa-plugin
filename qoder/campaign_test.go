@@ -82,6 +82,10 @@ func TestCampaignSummaryFromList(t *testing.T) {
 	if sum.Active || sum.TodayCheckedIn {
 		t.Fatalf("empty summary: %+v", sum)
 	}
+	// Inactive summaries surface the same no-campaign hint as the claim path.
+	if sum.ActivityName != noCampaignMessage {
+		t.Fatalf("inactive activity name = %q", sum.ActivityName)
+	}
 }
 
 func TestCampaignHeadersMatchDesktopClient(t *testing.T) {

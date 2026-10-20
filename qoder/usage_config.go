@@ -245,7 +245,10 @@ func configuredFingerprint() *checkinFingerprint {
 	if json.Unmarshal([]byte(raw), &fp) != nil {
 		return nil
 	}
-	if fp.MachineToken == "" || fp.MachineType == "" {
+	// All three core identity fields are required; a partial fingerprint would
+	// send a blank Cosy-MachineId and no Cosy-MachineCode, so fall back to the
+	// derived identity instead.
+	if fp.MachineID == "" || fp.MachineToken == "" || fp.MachineType == "" {
 		return nil
 	}
 	return &fp

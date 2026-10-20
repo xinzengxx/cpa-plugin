@@ -127,7 +127,7 @@ func performCheckinCall(sa *storedAuth) (map[string]any, error) {
 			"success":  false,
 			"inactive": true,
 			"reason":   "inactive",
-			"message":  "当前账号无可用签到活动（国际版新号请先在官方 Qoder 客户端领取一次）",
+			"message":  noCampaignMessage,
 		}, nil
 	}
 	if state == "claimed" {
