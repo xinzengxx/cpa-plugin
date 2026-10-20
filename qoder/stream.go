@@ -368,6 +368,18 @@ func streamErrorMessage(line string) string {
 	return ""
 }
 
+// upstreamFailureText renders the client-facing and recorded detail for a
+// non-2xx upstream response. When a 401/403 retry could not refresh the
+// credential, the refresh failure is appended to the upstream error so neither
+// part is swallowed.
+func upstreamFailureText(status int, body []byte, bodyLimit int, refreshErr error) string {
+	msg := fmt.Sprintf("upstream %d: %s", status, truncateRedacted(string(body), bodyLimit))
+	if refreshErr != nil {
+		msg += fmt.Sprintf(" (refresh failed: %v)", refreshErr)
+	}
+	return msg
+}
+
 func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *storedAuth, body []byte, requestID, sessionID, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID, nickname string, started time.Time, authID string) {
 	closed := false
 	closeOnce := func() {
@@ -384,9 +396,15 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 	var status int
 	var err error
 	// rejectedBody keeps the final 401/403 body: the stream is closed before
-	// the retry decision, so the original upstream error would be lost.
+	// the retry decision, so the original upstream error would be lost. It is
+	// reset on every attempt so a body captured from an earlier rejected
+	// attempt can never be attributed to a later attempt's status.
 	var rejectedBody []byte
+	// refreshErr records a failed refresh so the final 401/403 failure reports
+	// both the upstream status/body and the refresh failure.
+	var refreshErr error
 	for attempt := 0; attempt < 2; attempt++ {
+		rejectedBody = nil
 		httpReq, rerr := buildChatRequestWithContext(ctx, sa, body, requestID, sessionID)
 		if rerr != nil {
 			streamEmitError(streamID, rerr.Error())
@@ -404,8 +422,10 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 		}
 		rejectedBody, _ = io.ReadAll(newHostStreamReader(stream))
 		stream.Close()
-		if attempt == 0 && refreshForRetry(sa) == nil {
-			continue
+		if attempt == 0 {
+			if refreshErr = refreshForRetry(sa); refreshErr == nil {
+				continue
+			}
 		}
 		break
 	}
@@ -416,13 +436,13 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 		if len(raw) == 0 {
 			raw, _ = io.ReadAll(reader)
 		}
-		detail := truncateRedacted(string(raw), 300)
+		detail := upstreamFailureText(status, raw, 300, refreshErr)
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, status, detail)
 		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, usage.Detail{}, qoderCredits{}, true, detail)
 		if authUID != "" {
 			go reconcileByUID(authUID, status, string(raw))
 		}
-		streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", status, truncateRedacted(string(raw), 200)))
+		streamEmitError(streamID, upstreamFailureText(status, raw, 200, refreshErr))
 		return
 	}
 	collector := &sseUsageCollector{}
@@ -480,13 +500,15 @@ func pumpUpstreamStream(ctx context.Context, cancel context.CancelFunc, sa *stor
 }
 
 // collectUpstreamStream retries the synchronous stream collection exactly once
-// on 401/403 after refreshing the credential in memory.
+// on 401/403 after refreshing the credential in memory. A failed refresh
+// surfaces the original upstream error plus the refresh failure.
 func collectUpstreamStream(sa *storedAuth, requestedModel string, body []byte, requestID, sessionID string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	chunks, status, err := collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
 	if err != nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
-		if rerr := refreshForRetry(sa); rerr == nil {
-			return collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
+		if rerr := refreshForRetry(sa); rerr != nil {
+			return nil, status, fmt.Errorf("%w (refresh failed: %v)", err, rerr)
 		}
+		return collectUpstreamStreamOnce(sa, requestedModel, body, requestID, sessionID, sseFramed, collector)
 	}
 	return chunks, status, err
 }
