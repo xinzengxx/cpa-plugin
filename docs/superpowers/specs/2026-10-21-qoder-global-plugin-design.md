@@ -163,7 +163,7 @@ v1 先原样透传 `image_url`（含 `data:` URL）实测。若上游拒绝 data
 - campaign：`GET /sash/api/v1/me/campaigns` → 选 `CLAIMABLE` 的 Credits 活动 → `POST /campaigns/{id}/claim`（幂等，已领返回 replayed）。请求带 `cosy-clienttype: 10` + 官方 UA + `cosy-version`，**无需 COSY 签名**。
 - **国际版指纹限制**：新号首次领取前，服务端要求真实设备指纹（`cosy-machinetoken`/`cosy-machinetype`），自造无效；官方客户端领过一次后转为懒下发。处理：
   - 无 CLAIMABLE 活动时，面板明确提示「国际版新号请先在官方 Qoder 客户端领取一次」；
-  - auth attributes 支持可选 `checkin_fingerprint`（JSON：machine_id/machine_token/machine_type），存在时附加六头，不做导入 UI。
+  - 插件配置字段 `checkin_fingerprint`（JSON：machine_id/machine_token/machine_type），存在时请求附加真实指纹六头；未配置时用 UID 稳定派生的机器头，不做导入 UI。
 - 面板手动单号/全部签到 + 10:00/21:00 自动（10:00 UTC+8 活动刷新）；签到后刷新 quota 快照；credits 耗尽 disable、签到恢复 re-enable。
 - legacy `/daily-check-in` 国际版 404，不做 fallback。
 - 额度：`/api/v2/quota/usage`（userQuota + addOnQuota 求和）、`/api/v2/user/plan`。
