@@ -126,6 +126,33 @@ func TestExecuteChatOnceSurfacesHTTPError(t *testing.T) {
 	}
 }
 
+func TestExecuteChatOnceSurfacesSSEError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: error\n"))
+		_, _ = w.Write([]byte("data: {\"code\":\"provider_error\",\"message\":\"All models failed\",\"request_id\":\"req-1\",\"type\":\"provider_error\",\"details\":\"bedrock: AccessDeniedException: explicit deny\"}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+	old := upstreamChatURL
+	upstreamChatURL = srv.URL
+	defer func() { upstreamChatURL = old }()
+
+	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-test"}}
+	_, _, err := executeChatOnce(sa, clientModelID, upstreamUltimate, []byte(`{"messages":[{"role":"user","content":"hi"}]}`))
+	if err == nil {
+		t.Fatal("expected upstream SSE error, got nil")
+	}
+	for _, want := range []string{"All models failed", "AccessDeniedException"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "empty completion") {
+		t.Fatalf("SSE error reported as empty completion: %v", err)
+	}
+}
+
 func TestCompletionLooksEmpty(t *testing.T) {
 	empty := []byte(`{"choices":[{"message":{"role":"assistant","content":""}}]}`)
 	if !completionLooksEmpty(empty) {

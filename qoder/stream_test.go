@@ -87,8 +87,49 @@ func TestStreamErrorMessage(t *testing.T) {
 	if got := streamErrorMessage(`{"choices":[{"delta":{"content":"ok"}}]}`); got != "" {
 		t.Fatalf("normal chunk treated as error: %q", got)
 	}
+	if got := streamErrorMessage(`{"usage":{"total_tokens":1}}`); got != "" {
+		t.Fatalf("usage chunk treated as error: %q", got)
+	}
+	topLevel := streamErrorMessage(`{"code":"provider_error","message":"All models failed","request_id":"req-1","type":"provider_error","details":"bedrock: AccessDeniedException: explicit deny"}`)
+	for _, want := range []string{"provider_error", "All models failed", "bedrock: AccessDeniedException: explicit deny"} {
+		if !strings.Contains(topLevel, want) {
+			t.Fatalf("top-level error = %q, missing %q", topLevel, want)
+		}
+	}
+	nested := streamErrorMessage(`{"error":{"type":"provider_error","message":"All models failed","details":"egress proxy unavailable"}}`)
+	for _, want := range []string{"provider_error", "All models failed", "egress proxy unavailable"} {
+		if !strings.Contains(nested, want) {
+			t.Fatalf("nested error = %q, missing %q", nested, want)
+		}
+	}
 	if got := streamErrorMessage(`{"error":{"message":"no entitlement"}}`); got != "no entitlement" {
 		t.Fatalf("error message = %q", got)
+	}
+	if got := streamErrorMessage(`{"code":"provider_error","message":"x","details":{"region":"us-east-1"}}`); !strings.Contains(got, `{"region":"us-east-1"}`) {
+		t.Fatalf("object details not rendered: %q", got)
+	}
+	long := streamErrorMessage(`{"code":"provider_error","message":"` + strings.Repeat("x", 600) + `"}`)
+	if len(long) != 500 {
+		t.Fatalf("long error len = %d, want 500", len(long))
+	}
+	token := streamErrorMessage(`{"code":"provider_error","message":"auth Bearer abcdefghijklmnopqrstuvwxyz failed"}`)
+	if strings.Contains(token, "abcdefghijklmnopqrstuvwxyz") || !strings.Contains(token, "Bearer ***") {
+		t.Fatalf("token not redacted: %q", token)
+	}
+}
+
+func TestAggregateCompletionSurfacesSSEError(t *testing.T) {
+	const body = "event: error\n" +
+		"data: {\"code\":\"provider_error\",\"message\":\"All models failed\",\"type\":\"provider_error\",\"details\":\"bedrock: AccessDeniedException\"}\n\n" +
+		"data: [DONE]\n\n"
+	_, err := aggregateCompletion(strings.NewReader(body), clientModelID)
+	if err == nil {
+		t.Fatal("aggregateCompletion must return the upstream error, not an empty completion")
+	}
+	for _, want := range []string{"upstream error", "provider_error", "All models failed", "AccessDeniedException"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, missing %q", err, want)
+		}
 	}
 }
 

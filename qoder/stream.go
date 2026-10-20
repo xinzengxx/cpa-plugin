@@ -167,6 +167,12 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 		if data == "" || data == "[DONE]" {
 			continue
 		}
+		// Upstream can report a failure as an SSE error object and then close.
+		// Surface it before chunk parsing, otherwise the fold falls through to
+		// an "empty completion" that hides the provider's code and details.
+		if msg := streamErrorMessage(data); msg != "" {
+			return nil, fmt.Errorf("upstream error: %s", msg)
+		}
 		var chunk map[string]any
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
@@ -343,9 +349,16 @@ func isEmptyValue(v any) bool {
 	return false
 }
 
-// streamErrorMessage extracts an upstream error carried inside a data line.
-// Normal chunks always have "choices" or "usage"; only error objects are
-// treated as failures.
+// upstreamErrorLimit caps the rendered upstream error text. Provider errors
+// can embed long request/egress diagnostics; 500 chars is enough to identify
+// the failure without bloating published usage/recent records.
+const upstreamErrorLimit = 500
+
+// streamErrorMessage extracts an upstream error carried inside a data line and
+// renders it as "code: message (details)" so provider failures keep their
+// diagnostic detail. Normal chunks always have "choices" or "usage"; only
+// error objects are treated as failures. The rendered text is redacted and
+// capped before it is returned.
 func streamErrorMessage(line string) string {
 	var obj map[string]any
 	if json.Unmarshal([]byte(line), &obj) != nil {
@@ -358,14 +371,58 @@ func streamErrorMessage(line string) string {
 		return ""
 	}
 	if e, ok := obj["error"].(map[string]any); ok {
-		if msg, _ := e["message"].(string); strings.TrimSpace(msg) != "" {
-			return strings.TrimSpace(msg)
+		code := firstNonEmpty(stringValue(e, "code"), stringValue(e, "type"))
+		return renderUpstreamError(code, stringValue(e, "message"), detailText(e["details"]))
+	}
+	return renderUpstreamError(stringValue(obj, "code"), stringValue(obj, "message"), detailText(obj["details"]))
+}
+
+// renderUpstreamError composes "code: message (details)", skipping empty
+// parts, then redacts and truncates the result for safe surfacing.
+func renderUpstreamError(code, message, details string) string {
+	text := strings.TrimSpace(message)
+	if code = strings.TrimSpace(code); code != "" {
+		if text != "" {
+			text = code + ": " + text
+		} else {
+			text = code
 		}
 	}
-	if msg, ok := obj["message"].(string); ok && strings.TrimSpace(msg) != "" {
-		return strings.TrimSpace(msg)
+	if details = strings.TrimSpace(details); details != "" {
+		if text != "" {
+			text += " (" + details + ")"
+		} else {
+			text = details
+		}
 	}
-	return ""
+	if text == "" {
+		return ""
+	}
+	return truncateRedacted(text, upstreamErrorLimit)
+}
+
+// stringValue returns a trimmed string field, or "" when absent / not a string.
+func stringValue(obj map[string]any, key string) string {
+	s, _ := obj[key].(string)
+	return strings.TrimSpace(s)
+}
+
+// detailText renders an error "details" value. Upstream sends it as an opaque
+// string (often embedded JSON), but objects/arrays are flattened to JSON so
+// nothing is silently dropped.
+func detailText(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(x)
+	default:
+		raw, err := json.Marshal(x)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(raw))
+	}
 }
 
 // upstreamFailureText renders the client-facing and recorded detail for a
