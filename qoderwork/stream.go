@@ -33,13 +33,20 @@ func streamEmit(streamID string, payload []byte) error {
 	return err
 }
 
+// streamErrorWire carries an error through the host's dedicated stream error
+// channel. A payload-shaped {"error":...} chunk is ignored by the host's
+// cross-format translators (notably Claude), which used to turn upstream
+// failures into a silent empty end_turn.
+func streamErrorWire(streamID, message string) []byte {
+	raw, _ := json.Marshal(map[string]any{"stream_id": streamID, "error": redactSecrets(message)})
+	return raw
+}
+
 func streamEmitError(streamID, message string) {
 	if streamID == "" {
 		return
 	}
-	// A-37: never emit raw upstream bodies that may contain Bearer/JWT.
-	errJSON, _ := json.Marshal(map[string]any{"error": map[string]any{"message": redactSecrets(message)}})
-	_ = streamEmit(streamID, errJSON)
+	_, _ = hostCall(pluginabi.MethodHostStreamEmit, streamErrorWire(streamID, message))
 }
 
 var streamCloseOnce sync.Map // streamID -> sync.Once
@@ -207,6 +214,13 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
 		return
 	}
+	if !collector.hasOutput && collector.detail().TotalTokens == 0 {
+		const msg = "upstream returned an empty completion"
+		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, msg)
+		recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), true, msg)
+		streamEmitError(streamID, msg)
+		return
+	}
 	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
 	recordRecentCall(authID, authUID, nickname, requestedModel, upstreamModel, true, started, collector.detail(), collector.credits(), false, "")
 	invalidateAccountCredits(authID, authUID)
@@ -274,6 +288,9 @@ func collectUpstreamStreamQoder(encodedBody string, sa *storedAuth, modelKey str
 	}
 	if err := scanner.Err(); err != nil {
 		return chunks, 0, fmt.Errorf("upstream stream read error: %w", err)
+	}
+	if collector != nil && !collector.hasOutput && collector.detail().TotalTokens == 0 {
+		return chunks, 0, fmt.Errorf("upstream returned an empty completion")
 	}
 	return chunks, 0, nil
 }

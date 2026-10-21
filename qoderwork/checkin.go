@@ -1,5 +1,5 @@
 // checkin.go implements daily check-in for CN accounts: the manual
-// handleManualCheckin endpoint, the 09:00 / 21:00 auto scheduler, and the
+// handleManualCheckin endpoint, the 10:00 / 21:00 auto scheduler, and the
 // per-account mutex that prevents duplicate check-ins from racing browser
 // tabs. CN accounts are excluded — they use one-shot trial claims instead.
 package main
@@ -74,7 +74,7 @@ func schedulerLoop(stop chan struct{}) {
 	}
 }
 
-// runAutoCheckin is the scheduled lifecycle tick (09:00 / 21:00).
+// runAutoCheckin is the scheduled lifecycle tick (10:00 / 21:00).
 // CN: optional daily check-in, then reconcile (disable exhausted / reenable after credits).
 // CN: no auto trial (one-shot claim is manual only); reconcile may delete exhausted auths.
 //
@@ -219,8 +219,12 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 	for r := range outCh {
 		results[r.idx] = r.out
 	}
-	successN, alreadyN, failN := 0, 0, 0
+	successN, alreadyN, failN, inactiveN := 0, 0, 0, 0
 	for _, r := range results {
+		if r["inactive"] == true {
+			inactiveN++
+			continue
+		}
 		if r["error"] != nil {
 			failN++
 			continue
@@ -241,6 +245,7 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 			"total":      len(targets),
 			"success":    successN,
 			"already":    alreadyN,
+			"inactive":   inactiveN,
 			"fail":       failN,
 			"elapsed_ms": time.Since(t0).Milliseconds(),
 		},
@@ -278,17 +283,33 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		out["message"] = "今日已签到"
 		out["streak_days"] = ci.StreakDays
 		out["total_credits"] = ci.TotalCredits
+		out["activity_name"] = ci.ActivityName
+		return out
+	}
+	if !ci.Active {
+		out["success"] = false
+		out["skipped"] = true
+		out["inactive"] = true
+		out["reason"] = "inactive"
+		out["message"] = noCampaignMessage
+		out["activity_name"] = ci.ActivityName
 		return out
 	}
 
-	// Step 2: POST claim (5s budget).
+	// Step 2: claim the active campaign.
 	res, err := performCheckinCall(sa)
 	if err != nil {
 		out["error"] = "claim: " + err.Error()
 		return out
 	}
-	// QoderWork returns {"result":"ALREADY_CLAIMED"} with HTTP 409 — surface
-	// as already rather than error.
+	if res["inactive"] == true {
+		out["success"] = false
+		out["skipped"] = true
+		out["inactive"] = true
+		out["reason"] = "inactive"
+		out["message"] = noCampaignMessage
+		return out
+	}
 	if result, _ := res["result"].(string); result == "ALREADY_CLAIMED" {
 		out["success"] = true
 		out["skipped"] = true
@@ -301,10 +322,20 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 	}
 	if success, _ := res["success"].(bool); success {
 		out["success"] = true
+		if skipped, _ := res["skipped"].(bool); skipped {
+			out["skipped"] = true
+			out["reason"] = "already"
+		}
 		if rc, ok := res["rewardCredits"].(float64); ok {
 			out["reward_credits"] = int64(rc)
 		}
-		out["message"] = "签到成功"
+		if msg, ok := res["message"].(string); ok && msg != "" {
+			out["message"] = msg
+		} else if out["skipped"] == true {
+			out["message"] = "今日已签到"
+		} else {
+			out["message"] = "签到成功"
+		}
 		// Refresh the credits snapshot so the panel shows the post-checkin
 		// balance immediately (check-in grants new credits). Best-effort:
 		// a failure here must not flip the check-in result to error.
@@ -314,7 +345,13 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		return out
 	}
 	out["success"] = false
-	out["message"] = res
+	if msg, ok := res["message"].(string); ok && msg != "" {
+		out["message"] = msg
+	} else if errMsg, ok := res["error"].(string); ok && errMsg != "" {
+		out["message"] = errMsg
+	} else {
+		out["message"] = fmt.Sprint(res)
+	}
 	return out
 }
 

@@ -35,7 +35,7 @@ type checkinStatusResponse struct {
 	RewardExpiresAt    int64  `json:"rewardExpiresAt"` // s epoch
 }
 
-func fetchCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
+func fetchLegacyCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamBaseCN+"/sash/api/v1/me/daily-check-in/status", nil)
@@ -73,6 +73,40 @@ func fetchCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
 		sum.TodayCredit = q.RewardCredits
 	}
 	return sum, nil
+}
+
+// fetchCheckinStatus prefers the current campaign system (act-YYYYMMDD-*,
+// daily 10:00 UTC+8 reset) and falls back to the legacy /daily-check-in
+// endpoint when the campaign API is unavailable or reports no campaign.
+//
+// The fallback covers two distinct failure shapes: a transport/HTTP error, and
+// a successful response carrying an empty campaign list. The latter matters
+// because upstream answers an unusable device fingerprint with HTTP 200 and an
+// empty list, which would otherwise be reported as "no campaign available".
+//
+// The legacy endpoint is only called when the campaign path yields nothing, so
+// the normal path stays at one upstream request.
+func fetchCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
+	campaignSum, campaignErr := fetchCampaignCheckinStatus(sa)
+	if campaignErr == nil && campaignSum != nil && campaignSum.Active {
+		return campaignSum, nil
+	}
+
+	legacySum, legacyErr := fetchLegacyCheckinStatus(sa)
+	if legacyErr == nil && legacySum != nil && legacySum.Active {
+		return legacySum, nil
+	}
+
+	// Neither path offers an active campaign. Report the campaign result when
+	// the campaign API answered (even with an empty list), otherwise surface
+	// the combined error.
+	if campaignErr == nil && campaignSum != nil {
+		return campaignSum, nil
+	}
+	if legacyErr == nil && legacySum != nil {
+		return legacySum, nil
+	}
+	return nil, fmt.Errorf("campaign: %v; legacy: %v", campaignErr, legacyErr)
 }
 
 // quotaUsageResponse mirrors GET /api/v2/quota/usage response (plain JSON,
@@ -165,29 +199,50 @@ func fetchPaymentType(sa *storedAuth) string {
 }
 
 func performCheckinCall(sa *storedAuth) (map[string]any, error) {
-	req, err := http.NewRequest(http.MethodPost, upstreamBaseCN+"/sash/api/v1/me/daily-check-in/claim", strings.NewReader("{}"))
+	list, err := fetchCampaigns(sa)
 	if err != nil {
 		return nil, err
 	}
-	billingHeaders(req, sa)
-	resp, err := hostHTTPDo(req)
+	c, state := findCreditCampaign(list, time.Now())
+	if state == "" {
+		return map[string]any{
+			"success":  false,
+			"inactive": true,
+			"reason":   "inactive",
+			"message":  noCampaignMessage,
+		}, nil
+	}
+	if state == "claimed" {
+		return map[string]any{
+			"success":       true,
+			"skipped":       true,
+			"reason":        "already",
+			"message":       "今日已领取",
+			"rewardCredits": float64(c.Benefit.Amount),
+			"campaign_key":  c.CampaignKey,
+		}, nil
+	}
+	res, err := claimCampaign(sa, c.CampaignID)
 	if err != nil {
-		return map[string]any{"success": false, "message": err.Error()}, nil
-	}
-	if resp.StatusCode >= 400 {
-		return map[string]any{"success": false, "message": fmt.Sprintf("http %d: %s", resp.StatusCode, truncateRedacted(string(resp.Body), 200))}, nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(resp.Body, &m); err != nil {
 		return nil, err
 	}
-	// QoderWork checkin claim returns {"success":true, "rewardCredits":100,...}
-	// on success, or {"success":false,"error":"..."} on already-claimed.
-	// Normalise to the panel's expected shape (bool success).
-	if _, ok := m["success"]; !ok {
-		m["success"] = true
+	if success, _ := res["success"].(bool); success {
+		if _, ok := res["rewardCredits"]; !ok {
+			res["rewardCredits"] = float64(c.Benefit.Amount)
+		}
+		if _, ok := res["message"]; !ok {
+			res["message"] = "签到成功"
+		}
+		res["campaign_key"] = c.CampaignKey
+	} else {
+		msg, _ := res["message"].(string)
+		if strings.Contains(strings.ToLower(msg), "already") || strings.Contains(msg, "已领取") {
+			res["success"] = true
+			res["skipped"] = true
+			res["reason"] = "already"
+		}
 	}
-	return m, nil
+	return res, nil
 }
 
 // isCreditsExhausted is the shared "耗尽" definition for panel + scheduler.

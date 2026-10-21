@@ -264,3 +264,208 @@ func TestBuildQoderBodyUploadFailure(t *testing.T) {
 		t.Fatalf("want upload error, got %v", err)
 	}
 }
+
+func testToolDef(name string) map[string]any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        name,
+			"description": "test tool " + name,
+			"parameters": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"city": map[string]any{"type": "string"}},
+				"required":   []any{"city"},
+			},
+		},
+	}
+}
+
+func decodeQoderBody(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var base map[string]any
+	if err := json.Unmarshal(body, &base); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	return base
+}
+
+func toolNameOf(t *testing.T, raw any) string {
+	t.Helper()
+	m, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("tool entry is %T", raw)
+	}
+	fn, _ := m["function"].(map[string]any)
+	name, _ := fn["name"].(string)
+	return name
+}
+
+func TestBuildQoderBodyClientModePreservesToolProtocol(t *testing.T) {
+	payload := map[string]any{
+		"model":       "deepseek-v4.1-flash",
+		"max_tokens":  512,
+		"system":      []any{map[string]any{"type": "text", "text": "client system"}},
+		"tools":       []any{testToolDef("get_weather")},
+		"tool_choice": "auto",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "重庆天气？"},
+			map[string]any{"role": "assistant", "content": "", "tool_calls": []any{
+				map[string]any{
+					"id":   "call_1",
+					"type": "function",
+					"function": map[string]any{
+						"name":      "get_weather",
+						"arguments": `{"city":"重庆"}`,
+					},
+				},
+			}},
+			map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "25C sunny"},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req openAIRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	body, err := buildQoderBody(&req, "dfmodel", "personal_standard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := decodeQoderBody(t, body)
+
+	tools, _ := base["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("client tools not forwarded: %d tools", len(tools))
+	}
+	if got := toolNameOf(t, tools[0]); got != "get_weather" {
+		t.Fatalf("client tool name: %q", got)
+	}
+	if got := base["tool_choice"]; got != "auto" {
+		t.Fatalf("tool_choice not preserved: %#v", got)
+	}
+
+	msgs, _ := base["messages"].([]any)
+	if len(msgs) != 4 {
+		t.Fatalf("want system+user+assistant+tool, got %d messages: %s", len(msgs), body)
+	}
+	first, _ := msgs[0].(map[string]any)
+	if first["role"] != "system" || first["content"] != "client system" {
+		t.Fatalf("client system must replace Qoder base system, got %#v", first)
+	}
+	var assistant, toolMsg map[string]any
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		switch mm["role"] {
+		case "assistant":
+			assistant = mm
+		case "tool":
+			toolMsg = mm
+		}
+	}
+	if assistant == nil {
+		t.Fatal("assistant message with tool_calls was dropped")
+	}
+	tcs, _ := assistant["tool_calls"].([]any)
+	if len(tcs) != 1 {
+		t.Fatalf("assistant tool_calls not preserved: %#v", assistant)
+	}
+	tc, _ := tcs[0].(map[string]any)
+	if tc["id"] != "call_1" {
+		t.Fatalf("tool call id: %#v", tc)
+	}
+	if toolMsg == nil {
+		t.Fatal("tool result message missing")
+	}
+	if toolMsg["tool_call_id"] != "call_1" {
+		t.Fatalf("tool_call_id not preserved: %#v", toolMsg)
+	}
+	if toolMsg["content"] != "25C sunny" {
+		t.Fatalf("tool result content: %#v", toolMsg)
+	}
+}
+
+func TestBuildQoderBodyClientToolBudget(t *testing.T) {
+	tools := make([]any, 0, 70)
+	for i := 0; i < 70; i++ {
+		tools = append(tools, testToolDef(fmt.Sprintf("tool_%d", i)))
+	}
+	payload := map[string]any{
+		"model":    "dfmodel",
+		"tools":    tools,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	}
+	raw, _ := json.Marshal(payload)
+	var req openAIRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	body, err := buildQoderBody(&req, "dfmodel", "personal_standard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := decodeQoderBody(t, body)
+	got, _ := base["tools"].([]any)
+	if len(got) != 64 {
+		t.Fatalf("want 64 tools after budget, got %d", len(got))
+	}
+	if name := toolNameOf(t, got[0]); name != "tool_0" {
+		t.Fatalf("first tool: %q", name)
+	}
+	if name := toolNameOf(t, got[63]); name != "tool_63" {
+		t.Fatalf("last tool: %q", name)
+	}
+}
+
+func TestBuildQoderBodyDropsOversizedClientTools(t *testing.T) {
+	huge := testToolDef("huge_tool")
+	huge["function"].(map[string]any)["description"] = strings.Repeat("x", 200*1024)
+	payload := map[string]any{
+		"model":    "dfmodel",
+		"tools":    []any{huge},
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	}
+	raw, _ := json.Marshal(payload)
+	var req openAIRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	body, err := buildQoderBody(&req, "dfmodel", "personal_standard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := decodeQoderBody(t, body)
+	if got, ok := base["tools"]; ok {
+		if arr, _ := got.([]any); len(arr) != 0 {
+			t.Fatalf("oversized tool set should be dropped, got %d tools", len(arr))
+		}
+	}
+}
+
+func TestBuildQoderBodyNativeModeKeepsBaseTools(t *testing.T) {
+	raw := []byte(`{"model":"dfmodel","messages":[{"role":"user","content":"hello"}]}`)
+	var req openAIRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	body, err := buildQoderBody(&req, "dfmodel", "personal_standard", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := decodeQoderBody(t, body)
+	tools, _ := base["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatal("native mode must keep Qoder base tools")
+	}
+	found := false
+	for _, tool := range tools {
+		if toolNameOf(t, tool) == "Bash" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("native mode missing base Bash tool")
+	}
+}

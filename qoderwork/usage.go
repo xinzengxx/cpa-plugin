@@ -280,7 +280,8 @@ func creditsFromCompletion(payload []byte) qoderCredits {
 // sseUsageCollector scans upstream SSE chunks and keeps the last "usage"
 // object seen (QoderWork emits it on the terminal chunk).
 type sseUsageCollector struct {
-	last map[string]any
+	last      map[string]any
+	hasOutput bool
 }
 
 func (c *sseUsageCollector) credits() qoderCredits {
@@ -294,6 +295,26 @@ func (c *sseUsageCollector) feed(rawJSON string) {
 	var chunk map[string]any
 	if json.Unmarshal([]byte(rawJSON), &chunk) != nil {
 		return
+	}
+	if !c.hasOutput {
+		if choices, ok := chunk["choices"].([]any); ok {
+			for _, raw := range choices {
+				choice, _ := raw.(map[string]any)
+				delta, _ := choice["delta"].(map[string]any)
+				if s, _ := delta["content"].(string); s != "" {
+					c.hasOutput = true
+					break
+				}
+				if s, _ := delta["reasoning_content"].(string); s != "" {
+					c.hasOutput = true
+					break
+				}
+				if tcs, _ := delta["tool_calls"].([]any); len(tcs) > 0 {
+					c.hasOutput = true
+					break
+				}
+			}
+		}
 	}
 	if u, ok := chunk["usage"].(map[string]any); ok && len(u) > 0 {
 		c.last = u
