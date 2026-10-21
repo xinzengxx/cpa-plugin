@@ -9,7 +9,7 @@
 // Sliverkiss, adapted for Qoder Global (qoder.sh): device OAuth / PAT auth,
 // the single claude-opus-5-5 → ultimate mapping, and pass-through chat
 // completions. Original credit for the QoderWork plugin goes to Sliverkiss;
-// see https://github.com/Sliverkiss/cpa-plugin. Built with
+// see https://github.com/xinzengxx/cpa-plugin. Built with
 // -buildmode=c-shared and exports the cliproxy C ABI entry points.
 package main
 
@@ -365,7 +365,7 @@ func wbRegistration() registration {
 			Name:             providerName,
 			Version:          version,
 			Author:           "Sliverkiss",
-			GitHubRepository: "https://github.com/Sliverkiss/cpa-plugin",
+			GitHubRepository: "https://github.com/xinzengxx/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for Global accounts (default true)."},

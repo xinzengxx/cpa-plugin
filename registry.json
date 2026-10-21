@@ -7,9 +7,9 @@
       "description": "Tencent CodeBuddy (WorkBuddy) OAuth provider for CLIProxyAPI: multi-account login, dynamic models, chat executor, CN daily check-in, Global one-shot expert trial (manual), credit lifecycle (disable CN / delete Global when exhausted), credits panel with CN/Global filters, optional credits-aware scheduler.",
       "author": "Sliverkiss",
       "version": "0.9.3",
-      "repository": "https://github.com/Sliverkiss/cpa-plugin",
+      "repository": "https://github.com/xinzengxx/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png",
-      "homepage": "https://github.com/Sliverkiss/cpa-plugin/tree/main/workbuddy",
+      "homepage": "https://xinzengxx.github.io/workbuddy-cpa/",
       "license": "MIT",
       "tags": [
         "Provider",
@@ -25,9 +25,9 @@
       "description": "QoderWork CN (qoder.com.cn) provider for CLIProxyAPI: dual login (OAuth device authorization with auto pro-pack claim + PAT import), COSY-signed chat executor, dynamic model list, daily check-in with credit snapshot, token keepalive (deviceToken/jobToken prefix-routed, PAT fallback), accounts panel.",
       "author": "Sliverkiss",
       "version": "0.2.6",
-      "repository": "https://github.com/Sliverkiss/cpa-plugin",
+      "repository": "https://github.com/xinzengxx/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png",
-      "homepage": "https://github.com/Sliverkiss/cpa-plugin/tree/main/qoderwork",
+      "homepage": "https://xinzengxx.github.io/cpa-plugin/qoder-cn/",
       "license": "MIT",
       "tags": [
         "Provider",
@@ -43,11 +43,17 @@
       "description": "Qoder Global (qoder.com) provider for CLIProxyAPI: OAuth/PAT login, OpenAI-compatible pass-through executor exposing claude-opus-5-5 (upstream ultimate), campaign check-in with optional fingerprint, credits panel, token keepalive.",
       "author": "Sliverkiss",
       "version": "0.1.0",
-      "repository": "https://github.com/Sliverkiss/cpa-plugin",
+      "repository": "https://github.com/xinzengxx/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png",
-      "homepage": "https://github.com/Sliverkiss/cpa-plugin/tree/main/qoder",
+      "homepage": "https://xinzengxx.github.io/cpa-plugin/qoder-global/",
       "license": "MIT",
-      "tags": ["Provider", "OAuth", "Qoder", "Global", "Management"]
+      "tags": [
+        "Provider",
+        "OAuth",
+        "Qoder",
+        "Global",
+        "Management"
+      ]
     }
   ]
 }

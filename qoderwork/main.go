@@ -8,7 +8,7 @@
 // This file is a clean-room reimplementation reconstructed from the public
 // qoderwork.so binary (symbol table, string constants and RPC shape) published
 // by Sliverkiss. Original credit for the qoderwork plugin goes to Sliverkiss;
-// see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
+// see https://github.com/xinzengxx/cpa-plugin. Built with -buildmode=c-shared
 // and exports the cliproxy C ABI entry points.
 package main
 
@@ -343,7 +343,7 @@ func wbRegistration() registration {
 			Name:             providerName,
 			Version:          version,
 			Author:           "Sliverkiss (based on qoderwork by lovingfish)",
-			GitHubRepository: "https://github.com/Sliverkiss/cpa-plugin",
+			GitHubRepository: "https://github.com/xinzengxx/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for CN accounts (default true)."},
