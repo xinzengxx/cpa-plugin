@@ -346,9 +346,10 @@ func wbRegistration() registration {
 			GitHubRepository: "https://github.com/Sliverkiss/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
-				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 and 21:00 local time for CN accounts (default true)."},
+				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 10:00 and 21:00 local time for CN accounts (default true)."},
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
+				{Name: "checkin_fingerprint", Type: pluginapi.ConfigFieldTypeString, Description: "Optional JSON fingerprint for CN check-in. Required keys: machine_id/machine_token/machine_type; optional: machine_code/hostname/machine_os (defaults: machine_code=machine_id, hostname=os hostname). Upstream hides campaigns for an unknown machine token, so set this to reach device-gated activities. Run ./scripts/detect_fingerprint.sh on the machine running the Qoder CN client."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning."},
 				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
@@ -762,6 +763,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
+	sseFramed := clientNeedsSSEFrame(req.Metadata)
 	if !isAllowedUpstreamModel(upstreamModel) {
 		msg := fmt.Sprintf("model_not_supported: qoderwork serves Qwen/DeepSeek only (got %q)", req.Model)
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, msg)
@@ -794,7 +796,6 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	encodedBody := qoderEncode(body)
 
 	headers := streamHeaders()
-	sseFramed := clientNeedsSSEFrame(req.Metadata)
 
 	// No async stream id → fall back to synchronous chunk collection.
 	if req.StreamID == "" {

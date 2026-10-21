@@ -12,7 +12,7 @@
 | **图片输入** | 支持 OpenAI `image_url` 和 Anthropic `image` 块；自动上传到 Qoder 的 `/algo/api/v2/image/upload`，再以 `messages[].image_url` 发送。png/jpeg/gif/webp，单图 ≤10MB，最多 5 张 |
 | **动态模型** | COSY 拉取 `/algo/api/v2/model/list`（chat scene），14 静态模型兜底；只暴露 Qwen / DeepSeek 系列 |
 | **最近请求** | 面板显示最近 20 条调用的时间、模型、输入/输出 token、状态、耗时（进程重启清零） |
-| **每日签到** | 面板手动签到（单账号/批量）+ 09:00/21:00 定时自动签到，签到后返回最新积分快照 |
+| **每日签到** | 面板手动签到（单账号/批量）+ 10:00/21:00 定时自动签到，签到后返回最新积分快照 |
 | **积分面板** | 账号卡片：昵称/积分/计划/签到状态/操作（签到/刷新/选用） |
 | **token 保活** | 22:00 定时刷新；按 token 前缀路由（drt- → deviceToken/refresh，jrt- → jobToken/refresh），PAT 永不劫持 OAuth 刷新 |
 | **auth 隔离** | 文件名前缀 `qoderwork-` 过滤，与 workbuddy 等其他插件互不干扰 |
@@ -44,6 +44,8 @@ plugins:
   configs:
     qoderwork:
       enabled: true
+      # 可选：真实设备指纹，用于领取仅对真实设备下发的签到活动
+      # checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"..."}'
 
 # 模型别名（可选）
 oauth-model-alias:
@@ -73,7 +75,31 @@ oauth-model-alias:
 `/v0/resource/plugins/qoderwork/panel`（需 management key）
 
 - 账号卡片：积分余额 / 计划 / 签到按钮（签到后返回最新积分）
-- 「全部签到」批量签到；自动签到开关（09:00/21:00）
+- 「全部签到」批量签到；自动签到开关（10:00/21:00）
+- 签到走 Qoder 新版 campaign：`/sash/api/v1/me/campaigns` + `/campaigns/{id}/claim`，每日 10:00（UTC+8）刷新"每天领 100 Credits"；旧 `/daily-check-in` 仅作 fallback
+
+### 签到设备指纹（可选）
+
+CN 的 `/sash/api/v1/me/campaigns` 遇到**未知的 `Cosy-MachineToken`** 会返回 HTTP 200 + **空活动列表**（不报错），面板于是显示"当前账号无可用签到活动"。
+
+因此插件默认**不发送任何机器头**——此时上游正常下发该账号的活动。若需要领取仅对真实设备下发的活动，在装了 Qoder CN 客户端的机器上运行：
+
+```bash
+./scripts/detect_fingerprint.sh
+```
+
+把输出整行填入插件配置（**输出含设备 token，不要外传**）：
+
+```yaml
+plugins:
+  configs:
+    qoderwork:
+      checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"...","machine_code":"..."}'
+```
+
+必填 `machine_id` / `machine_token` / `machine_type`；`machine_code` 缺省等于 `machine_id`。字段不全或 JSON 非法时会整体忽略该配置（退回到"不带机器头"），不会发出半截指纹。
+
+配置后重启 CPA，面板签到即可看到当日活动；当天已领取会显示"今日已签到"。
 
 ## 凭证家族与刷新
 
@@ -103,6 +129,17 @@ auth 文件字段（可共存）：
 | DeepSeek | `dfmodel` | `deepseek-v4-flash` / `deepseek-v4.1-flash` |
 
 模型清单由 COSY 动态拉取，静态表仅作冷启动兜底。
+
+## 在带工具的 Agent 中使用（客户端模式）
+
+请求里带 `tools` 时，插件自动进入客户端模式：
+
+- 使用客户端自己的 system prompt 和工具定义，不再注入 Qoder 的 baseprompt system / 14 个内置工具；
+- 完整保留 `assistant.tool_calls` 和 `role:"tool"` 的 `tool_call_id`，支持并行工具调用和工具结果续跑；
+- 工具预算为最多 64 个 / 128KB，超出部分截断，避免 ZCode 这类客户端一次发送上百个 MCP 工具时撑爆上下文；
+- 请求不带 `tools` 时仍走原来的 Qoder agent 模式（baseprompt + 内置工具）。
+
+已通过 CPA 两条入口实测：OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages` 均能完成“工具调用 → tool_result → 最终回答”的完整闭环（qwen3.8-max / deepseek-v4-pro / deepseek-v4.1-flash）。
 
 ## 图片输入
 

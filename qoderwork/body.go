@@ -44,18 +44,53 @@ func cpaToUpstreamKey(cpaModel string) string {
 // openAIMessage accepts both OpenAI string content and provider-translated
 // content-block arrays (Anthropic /v1/messages reaches the plugin this way).
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	Role       string          `json:"role"`
+	Content    any             `json:"content"`
+	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
 }
 
 // openAIRequest is the CPA-facing chat completion request. System and
 // MaxTokens cover the Anthropic /v1/messages shape as well.
 type openAIRequest struct {
-	Model     string          `json:"model"`
-	Messages  []openAIMessage `json:"messages"`
-	System    any             `json:"system"`
-	Stream    bool            `json:"stream"`
-	MaxTokens int64           `json:"max_tokens"`
+	Model      string            `json:"model"`
+	Messages   []openAIMessage   `json:"messages"`
+	System     any               `json:"system"`
+	Stream     bool              `json:"stream"`
+	MaxTokens  int64             `json:"max_tokens"`
+	Tools      []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice json.RawMessage   `json:"tool_choice,omitempty"`
+}
+
+const (
+	maxClientTools     = 64
+	maxClientToolBytes = 128 * 1024
+)
+
+// selectClientTools keeps a bounded prefix of the client tool list. Qoder's
+// agent endpoint shares the model context with the tool schemas, and clients
+// such as ZCode can send 100+ MCP tools in one request.
+func selectClientTools(tools []json.RawMessage) []json.RawMessage {
+	out := make([]json.RawMessage, 0, minInt(len(tools), maxClientTools))
+	total := 0
+	for _, tool := range tools {
+		if len(out) >= maxClientTools {
+			break
+		}
+		if total+len(tool) > maxClientToolBytes {
+			break
+		}
+		out = append(out, tool)
+		total += len(tool)
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // normalizeContent flattens string content and text/tool_result/tool_use/image
@@ -383,36 +418,100 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string, upload imageU
 		}
 	}
 
-	// messages: keep system prompt from baseprompt (template has it), replace user/assistant
-	var systemMsgs []any
-	if msgs, ok := base["messages"].([]any); ok {
-		for _, m := range msgs {
-			if mm, ok := m.(map[string]any); ok {
-				if role, _ := mm["role"].(string); role == "system" {
-					systemMsgs = append(systemMsgs, m)
+	// Client-agent mode: the client supplies its own system prompt and tool
+	// table, so Qoder's built-in agent prompt/tools must not be mixed in.
+	clientMode := req.Tools != nil
+	if clientMode {
+		selected := selectClientTools(req.Tools)
+		if len(selected) > 0 {
+			tools := make([]any, 0, len(selected))
+			for _, tool := range selected {
+				tools = append(tools, tool)
+			}
+			base["tools"] = tools
+			if len(req.ToolChoice) > 0 {
+				base["tool_choice"] = req.ToolChoice
+			}
+		} else {
+			delete(base, "tools")
+		}
+		if len(selected) == 0 {
+			delete(base, "tool_choice")
+		}
+	}
+
+	// messages: in client mode the client system prompt replaces the Qoder
+	// agent system prompt; otherwise keep the template system prompt.
+	var outMsgs []any
+	if clientMode {
+		var sysParts []string
+		if s := normalizeContent(req.System); s != "" {
+			sysParts = append(sysParts, s)
+		}
+		for _, m := range req.Messages {
+			if strings.EqualFold(strings.TrimSpace(m.Role), "system") {
+				if s := normalizeContent(m.Content); s != "" {
+					sysParts = append(sysParts, s)
 				}
 			}
 		}
-	}
-	if sys := normalizeContent(req.System); sys != "" {
-		systemMsgs = append(systemMsgs, map[string]any{"role": "system", "content": sys})
+		sys := joinSystemParts(sysParts)
+		if sys == "" {
+			sys = "You are a helpful assistant."
+		}
+		outMsgs = append(outMsgs, map[string]any{"role": "system", "content": sys})
+	} else {
+		if msgs, ok := base["messages"].([]any); ok {
+			for _, m := range msgs {
+				if mm, ok := m.(map[string]any); ok {
+					if role, _ := mm["role"].(string); role == "system" {
+						outMsgs = append(outMsgs, m)
+					}
+				}
+			}
+		}
+		if sys := normalizeContent(req.System); sys != "" {
+			outMsgs = append(outMsgs, map[string]any{"role": "system", "content": sys})
+		}
 	}
 	// Append the actual conversation. Text stays text; image blocks are
 	// uploaded and kept as messages[].image_url so the vision model sees them.
 	for _, m := range req.Messages {
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		if clientMode && role == "system" {
+			continue
+		}
 		content, err := messageContentForQoder(m.Content, upload)
 		if err != nil {
 			return nil, err
 		}
-		if content == "" {
+		msg := map[string]any{"role": m.Role, "content": content}
+		if role == "assistant" && len(m.ToolCalls) > 0 {
+			msg["tool_calls"] = m.ToolCalls
+		}
+		if role == "tool" {
+			// Qoder validates tool_call_id on tool messages; when a client
+			// omits it, keep the result as text instead of sending a request
+			// the upstream will reject.
+			if m.ToolCallID == "" {
+				text := normalizeContent(m.Content)
+				if text == "" {
+					continue
+				}
+				msg["role"] = "user"
+				msg["content"] = "[tool result]\n" + text
+				outMsgs = append(outMsgs, msg)
+				continue
+			}
+			msg["tool_call_id"] = m.ToolCallID
+			msg["content"] = normalizeContent(m.Content)
+		}
+		if content == "" && role != "tool" && !(role == "assistant" && len(m.ToolCalls) > 0) {
 			continue
 		}
-		systemMsgs = append(systemMsgs, map[string]any{
-			"role":    m.Role,
-			"content": content,
-		})
+		outMsgs = append(outMsgs, msg)
 	}
-	base["messages"] = systemMsgs
+	base["messages"] = outMsgs
 
 	// business
 	if biz, ok := base["business"].(map[string]any); ok {
@@ -422,6 +521,20 @@ func buildQoderBody(req *openAIRequest, modelKey, userType string, upload imageU
 	}
 
 	return json.Marshal(base)
+}
+
+func joinSystemParts(parts []string) string {
+	seen := make(map[string]bool, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func truncateRunes(s string, n int) string {

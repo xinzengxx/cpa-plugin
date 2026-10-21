@@ -2,8 +2,13 @@
 dist/
 *.so
 *.h
+*.dylib
 
 # Go
 *.test
 *.out
 workbuddy/workbuddy-plus
+
+# local c-shared plugin binaries (macOS)
+qoderwork/qoderwork
+qoder/qoder

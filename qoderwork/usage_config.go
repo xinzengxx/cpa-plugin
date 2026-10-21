@@ -13,13 +13,22 @@ import (
 	"time"
 )
 
-// check-in schedule: 09:00 and 21:00 local time.
-var checkinHours = []int{9, 21}
+// check-in schedule: 10:00 and 21:00 local time. The daily campaign resets at
+// 10:00 UTC+8, so the old 09:00 tick ran before the activity existed.
+var checkinHours = []int{10, 21}
 
 // plugin-level config decoded from plugin.register/reconfigure config_yaml.
 var (
 	checkinAuto   = true // enabled by default
 	checkinAutoMu sync.RWMutex
+
+	// checkin_fingerprint: optional JSON with real device identity
+	// (machine_id/machine_token/machine_type). The CN campaigns endpoint
+	// silently returns an empty campaign list when the request carries an
+	// unknown Cosy-MachineToken, so a real device fingerprint is the only way
+	// to reach device-gated campaigns. When unset, no machine token is sent.
+	checkinFingerprintJSON = ""
+	checkinFingerprintMu   sync.RWMutex
 
 	// usageReportURL / usageReportKey: POST NDJSON to CPA-Manager-Plus
 	// /v0/management/usage/import (only path that reaches request monitoring;
@@ -62,6 +71,7 @@ func configure(raw []byte) {
 	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
 	nextKeepaliveAuto := true
 	nextMgmtKey := ""
+	nextFingerprint := ""
 
 	cfgURL, cfgKey := "", ""
 	if len(raw) > 0 {
@@ -104,6 +114,10 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					nextKeepaliveAuto = v == "true" || v == "1" || v == "yes" || v == "on"
 				}
+				if strings.HasPrefix(line, "checkin_fingerprint:") {
+					v := strings.TrimSpace(strings.TrimPrefix(line, "checkin_fingerprint:"))
+					nextFingerprint = strings.Trim(v, "\"'")
+				}
 			}
 		}
 	}
@@ -124,6 +138,10 @@ func configure(raw []byte) {
 	keepaliveAutoMu.Lock()
 	keepaliveAuto = nextKeepaliveAuto
 	keepaliveAutoMu.Unlock()
+
+	checkinFingerprintMu.Lock()
+	checkinFingerprintJSON = nextFingerprint
+	checkinFingerprintMu.Unlock()
 
 	// management key: config_yaml > env > keep existing. Empty stays empty
 	// (plugin-layer auth disabled, host middleware still guards).
@@ -207,4 +225,36 @@ func readSecretFile(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// checkinFingerprint is the real device identity used for campaign requests.
+// Mirrors the Global plugin's struct so the same JSON works for both.
+type checkinFingerprint struct {
+	MachineID    string `json:"machine_id"`
+	MachineToken string `json:"machine_token"`
+	MachineType  string `json:"machine_type"`
+	MachineCode  string `json:"machine_code"`
+	Hostname     string `json:"hostname"`
+	MachineOS    string `json:"machine_os"`
+}
+
+// configuredFingerprint returns the configured device fingerprint, or nil when
+// none is set. A partial fingerprint is rejected: sending a blank
+// Cosy-MachineId would look like a different device than the token belongs
+// to, and upstream answers with an empty campaign list rather than an error.
+func configuredFingerprint() *checkinFingerprint {
+	checkinFingerprintMu.RLock()
+	raw := checkinFingerprintJSON
+	checkinFingerprintMu.RUnlock()
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var fp checkinFingerprint
+	if json.Unmarshal([]byte(raw), &fp) != nil {
+		return nil
+	}
+	if fp.MachineID == "" || fp.MachineToken == "" || fp.MachineType == "" {
+		return nil
+	}
+	return &fp
 }
