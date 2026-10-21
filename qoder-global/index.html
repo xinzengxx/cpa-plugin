@@ -134,7 +134,7 @@
       <span>Go · c-shared</span>
       <span>版本 v0.1.0</span>
       <span>OpenAI 兼容透传</span>
-      <span>单模型 claude-opus-5-5</span>
+      <span>claude-opus-5-5 + deepseek-v4.1-flash</span>
     </div>
     <div class="invite">
       <b>注册邀请码</b>
@@ -148,12 +148,14 @@
   <div class="wrap">
     <h2>模型</h2>
     <p class="sec-sub">
-      v1 只暴露这一个模型；其他模型请求会返回 <code>model_not_supported</code>，不会静默回退到 Auto。
+      v0.2.0 暴露这两个模型；其他模型请求会返回 <code>model_not_supported</code>，不会静默回退到 Auto。上游可用键实测：
+      <code>ultimate</code> / <code>dmodel</code>(=DeepSeek-V4-Pro) / <code>qmodel</code>(=qwen3.7-plus) / <code>q35model</code> / <code>kmodel</code>(=kimi-k2.7-code) / <code>mmodel</code>(=MiniMax-M2.5)。
     </p>
     <table>
       <thead><tr><th>客户端调用名</th><th>上游 key</th><th>说明</th></tr></thead>
       <tbody>
         <tr><td><code>claude-opus-5-5</code></td><td><code>ultimate</code></td><td>Qoder 国际版「极致」模型；上游真实来源以官方为准</td></tr>
+        <tr><td><code>deepseek-v4.1-flash</code></td><td><code>dmodel</code></td><td>上游 dmodel 实际服务 DeepSeek-V4-Pro；客户端名与 CN 版对齐</td></tr>
       </tbody>
     </table>
   </div>
