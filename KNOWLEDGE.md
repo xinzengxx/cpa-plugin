@@ -25,7 +25,7 @@
 
 ### 1.1 PAT（Personal Access Token）
 
-**格式：** `pt-{24字符}_{uuid}`，例：`pt-XAoLmz72sTkTDxNEDs04PPXQ_019f9bfb-8bc3-7f15-9ac3-b2bd8f2ea9cc`
+**格式：** `pt-{24字符}_{uuid}`，例：`pt-XXXXXXXXXXXXXXXXXXXXXXXX_{uuid}`（完整值即凭据，不要写入文档或提交）
 
 **创建（只能在主站 web session，openapi 域无此端点）：**
 
