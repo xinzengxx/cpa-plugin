@@ -36,7 +36,7 @@
 - [ ] **Step 1: 复制 fork 源文件**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 mkdir -p qoder
 for f in active_auth.go authfile.go billing.go cache.go campaign.go campaign_test.go checkin.go credits_handler.go host_auth.go host_bridge.go keepalive.go lifecycle.go main.go management.go models.go oauth.go panel.go panel.html policy.go recent.go recent_test.go scheduler.go stream.go usage.go usage_config.go go.mod go.sum Makefile VERSION LICENSE; do
   cp "qoderwork/$f" "qoder/$f"
@@ -146,7 +146,7 @@ func TestGlobalModelsAdvertisesSingleModel(t *testing.T) {
 - [ ] **Step 6: 运行测试确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run 'TestCPAToUpstreamKey|TestUnknownModelRejectedByGuard|TestGlobalModelsAdvertisesSingleModel'
 ```
 
@@ -314,7 +314,7 @@ import 增加 `crypto/md5`、`crypto/sha512`、`encoding/base64`、`encoding/hex
 - [ ] **Step 12: 编译、vet、跑测试**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go build ./...
 go vet ./...
@@ -326,7 +326,7 @@ Expected: 全部 PASS；`go build` 无输出。
 - [ ] **Step 13: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/
 git commit -m "feat(qoder): fork QoderWork plugin for Qoder Global and map claude-opus-5-5 to ultimate"
 ```
@@ -495,7 +495,7 @@ func TestCompletionLooksEmpty(t *testing.T) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run 'TestBuildPassthroughBody|TestExecuteChatOnce|TestCompletionLooksEmpty'
 ```
 
@@ -670,7 +670,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go test ./... -run 'TestBuildPassthroughBody|TestExecuteChatOnce|TestCompletionLooksEmpty' -count=1
 go vet ./...
@@ -681,7 +681,7 @@ Expected: PASS。
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/executor.go qoder/executor_test.go qoder/main.go
 git commit -m "feat(qoder): add pass-through non-stream executor for claude-opus-5-5"
 ```
@@ -819,7 +819,7 @@ func TestCollectUpstreamStreamEmptyGuard(t *testing.T) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run 'TestCollectUpstreamStream|TestStreamErrorMessage'
 ```
 
@@ -1081,7 +1081,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go test ./... -run 'TestCollectUpstreamStream|TestStreamErrorMessage' -count=1
 go test ./... -count=1
@@ -1093,7 +1093,7 @@ Expected: 全部 PASS。
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/stream.go qoder/stream_test.go qoder/main.go
 git commit -m "feat(qoder): stream standard OpenAI SSE chunks with tool_calls preserved"
 ```
@@ -1161,7 +1161,7 @@ func TestExecuteChatWithRetryRefreshesOnce(t *testing.T) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run TestExecuteChatWithRetryRefreshesOnce
 ```
 
@@ -1274,7 +1274,7 @@ func collectUpstreamStream(sa *storedAuth, requestedModel string, body []byte, r
 - [ ] **Step 5: 运行测试**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go test ./... -run TestExecuteChatWithRetryRefreshesOnce -count=1
 go test ./... -count=1
@@ -1286,7 +1286,7 @@ Expected: PASS。
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/executor.go qoder/executor_test.go qoder/retry_test.go qoder/main.go qoder/stream.go
 git commit -m "feat(qoder): refresh credentials once on 401/403 and retry"
 ```
@@ -1358,7 +1358,7 @@ func TestStartLoginGlobalURL(t *testing.T) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run TestStartLoginGlobalURL
 ```
 
@@ -1402,7 +1402,7 @@ const (
 - [ ] **Step 4: 运行测试**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go test ./... -run TestStartLoginGlobalURL -count=1
 go test ./... -count=1
@@ -1413,7 +1413,7 @@ Expected: PASS。
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/oauth.go qoder/oauth_test.go
 git commit -m "feat(qoder): use Qoder Global device OAuth client parameters"
 ```
@@ -1483,7 +1483,7 @@ func setFingerprintForTest(raw string) {
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 go test ./... -run TestCampaignHeaders
 ```
 
@@ -1609,7 +1609,7 @@ func fetchCheckinStatus(sa *storedAuth) (*checkinSummary, error) {
 - [ ] **Step 7: 运行测试**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 gofmt -w .
 go test ./... -run 'TestCampaignHeaders|TestCampaign' -count=1
 go test ./... -count=1
@@ -1621,7 +1621,7 @@ Expected: PASS。
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/billing.go qoder/campaign.go qoder/usage_config.go qoder/main.go qoder/fingerprint_test.go
 git commit -m "feat(qoder): campaign-only check-in with optional device fingerprint"
 ```
@@ -1637,7 +1637,7 @@ git commit -m "feat(qoder): campaign-only check-in with optional device fingerpr
 - [ ] **Step 1: 面板品牌化**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 sed -i '' 's/QoderWork/Qoder Global/g' panel.html
 grep -n "Qoder Global" panel.html | head
 ```
@@ -1719,7 +1719,7 @@ plugins:
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add qoder/README.md qoder/panel.html qoder/main.go registry.json
 git commit -m "docs(qoder): add README, panel branding and registry entry"
 ```
@@ -1737,7 +1737,7 @@ git commit -m "docs(qoder): add README, panel branding and registry entry"
 - [ ] **Step 1: 构建 dylib**
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin/qoder
+cd <repo-root>/qoder
 CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-X main.version=0.1.0" -o qoder.dylib .
 ls -lh qoder.dylib
 ```
@@ -1862,7 +1862,7 @@ Expected: 输出 `qwen3.8-max`（CN 插件未被影响）。
 把实测结果（模型列表、工具往返输出、签到结果、ZCode 日志行）贴回会话；若实现与 spec 有偏差，更新 spec 并 commit：
 
 ```bash
-cd /Users/xinyuan/Downloads/GitHub/cpa-plugin
+cd <repo-root>
 git add docs/superpowers/specs/2026-10-21-qoder-global-plugin-design.md
 git commit -m "docs(qoder): record live verification results"
 ```
