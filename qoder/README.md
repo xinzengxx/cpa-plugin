@@ -1,14 +1,15 @@
 # Qoder Global CPA 插件
 
-CLIProxyAPI 的 Qoder 国际版（qoder.com）Provider 插件：OAuth/PAT 双登录、OpenAI 兼容透传、单模型 `claude-opus-5-5`、每日签到、积分面板、token 保活。
+CLIProxyAPI 的 Qoder 国际版（qoder.com）Provider 插件：OAuth/PAT 双登录、OpenAI 兼容透传、双模型（`claude-opus-5-5` + `deepseek-v4.1-flash`）、每日签到、积分面板、token 保活。
 
 ## 模型
 
 | 客户端调用名 | 上游 key | 说明 |
 |---|---|---|
 | `claude-opus-5-5` | `ultimate` | Qoder 国际版“极致”模型；上游真实来源以官方为准 |
+| `deepseek-v4.1-flash` | `dmodel` | 上游 dmodel 实际服务 DeepSeek-V4-Pro（2026-10-21 实测确认）；客户端名与 CN 版对齐 |
 
-v1 只暴露这一个模型；其他模型请求会返回 `model_not_supported`，不会静默回退到 Auto。
+v0.2.0 暴露这两个模型；其他模型请求会返回 `model_not_supported`，不会静默回退到 Auto。上游可用键实测为：`ultimate` / `dmodel` / `qmodel`(=qwen3.7-plus) / `q35model` / `kmodel`(=kimi-k2.7-code) / `mmodel`(=MiniMax-M2.5)；没有 deepseek flash 或 dfmodel 键。
 
 ## 安装
 
