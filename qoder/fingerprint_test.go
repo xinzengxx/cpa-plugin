@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"testing"
@@ -89,4 +90,24 @@ func setFingerprintForTest(raw string) {
 	checkinFingerprintMu.Lock()
 	checkinFingerprintJSON = raw
 	checkinFingerprintMu.Unlock()
+}
+
+func TestConfigureParsesCheckinFingerprint(t *testing.T) {
+	line := `checkin_fingerprint: '{"machine_id":"mid","machine_token":"mtok","machine_type":"mtype"}'`
+	// config_yaml is a JSON-encoded []byte (base64 on the wire), matching the
+	// host's plugin.register/reconfigure envelope.
+	raw, err := json.Marshal(map[string][]byte{"config_yaml": []byte(line)})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	configure(raw)
+	defer setFingerprintForTest("")
+
+	fp := configuredFingerprint()
+	if fp == nil {
+		t.Fatal("checkin_fingerprint was not parsed from plugin config")
+	}
+	if fp.MachineID != "mid" || fp.MachineToken != "mtok" || fp.MachineType != "mtype" {
+		t.Fatalf("parsed fingerprint = %+v", fp)
+	}
 }

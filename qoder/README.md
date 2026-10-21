@@ -38,7 +38,21 @@ plugins:
 
 ## 签到
 
-面板支持单账号/全部签到，自动签到 10:00 / 21:00。国际版新号可能因设备指纹限制看不到活动：请先在官方 Qoder 客户端领取一次，或在配置中提供 `checkin_fingerprint`。
+面板支持单账号/全部签到，自动签到 10:00 / 21:00。
+
+国际版的每日 100 Credits 活动**只对真实设备指纹下发**；UID 派生的机器头能拉到部分活动，但 `CLAIM_BENEFIT` 不会出现。macOS 官方客户端所在机器可运行：
+
+```bash
+./scripts/detect_fingerprint.sh
+```
+
+把输出整行填入配置（注意输出含设备 token，不要外传）：
+
+```yaml
+checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"...","machine_code":"..."}'
+```
+
+没有本机客户端时，可先在官方 Qoder 客户端领取一次（之后懒下发），或从官方客户端抓包取得 `machine_token`/`machine_type`。配置后重启 CPA，面板签到即可看到当日活动；当天已领取会显示“今日已签到”。
 
 ## 透传
 
