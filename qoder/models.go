@@ -1,7 +1,8 @@
 // models.go implements the ModelProvider capability for Qoder Global.
-// v1 advertises exactly one client-facing model, claude-opus-5-5, mapped to
-// Qoder's "ultimate" tier. There is no dynamic model discovery: entitlement
-// problems surface as upstream errors from the executor.
+// Two client-facing models are advertised: claude-opus-5-5 mapped to Qoder's
+// "ultimate" tier, and deepseek-v4.1-flash mapped to the upstream "dmodel"
+// key. There is no dynamic model discovery: entitlement problems surface as
+// upstream errors from the executor.
 package main
 
 import (
@@ -14,24 +15,39 @@ import (
 const (
 	clientModelID    = "claude-opus-5-5"
 	upstreamUltimate = "ultimate"
+	clientDeepseekID = "deepseek-v4.1-flash"
+	upstreamDeepseek = "dmodel" // upstream serves deepseek-v4-pro behind this key
 )
 
 func globalModels() []pluginapi.ModelInfo {
-	return []pluginapi.ModelInfo{{
-		ID:                         clientModelID,
-		Name:                       "Qoder Ultimate",
-		ContextLength:              200000,
-		MaxCompletionTokens:        8192,
-		OwnedBy:                    providerName,
-		SupportedGenerationMethods: []string{"chat"},
-	}}
+	return []pluginapi.ModelInfo{
+		{
+			ID:                         clientModelID,
+			Name:                       "Qoder Ultimate",
+			ContextLength:              200000,
+			MaxCompletionTokens:        8192,
+			OwnedBy:                    providerName,
+			SupportedGenerationMethods: []string{"chat"},
+		},
+		{
+			ID:                         clientDeepseekID,
+			Name:                       "DeepSeek V4 Pro (via Qoder)",
+			ContextLength:              128000,
+			MaxCompletionTokens:        8192,
+			OwnedBy:                    providerName,
+			SupportedGenerationMethods: []string{"chat"},
+		},
+	}
 }
 
 // cpaToUpstreamKey maps a client-facing model id to the upstream gateway key.
 func cpaToUpstreamKey(cpaModel string) string {
 	m := strings.ToLower(strings.TrimSpace(stripProviderPrefix(cpaModel)))
-	if m == clientModelID || m == upstreamUltimate {
+	switch m {
+	case clientModelID, upstreamUltimate:
 		return upstreamUltimate
+	case clientDeepseekID, upstreamDeepseek:
+		return upstreamDeepseek
 	}
 	return m
 }
@@ -39,7 +55,7 @@ func cpaToUpstreamKey(cpaModel string) string {
 // isAllowedUpstreamModel is the executor-side guard. Unknown models are
 // rejected instead of silently falling back to Auto upstream.
 func isAllowedUpstreamModel(model string) bool {
-	return model == upstreamUltimate
+	return model == upstreamUltimate || model == upstreamDeepseek
 }
 
 func handleModelStatic(raw []byte) ([]byte, error) {
