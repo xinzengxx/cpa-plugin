@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qoder Global · Qoder 国际版插件 for CLIProxyAPI</title>
+<meta name="description" content="把 Qoder 国际版（qoder.com）封装成 CLIProxyAPI 的 Provider 插件：OpenAI 兼容透传、claude-opus-5-5 单模型、campaign 签到、积分面板、token 自动保活。">
+<style>
+  :root{
+    --bg:#0d1117; --surface:#161b22; --surface-2:#1c2230; --line:#262d38;
+    --fg:#e6edf3; --muted:#9198a1; --faint:#6e7681;
+    --acc:#a371f7; --acc-dim:#8957e5; --green:#3fb950; --amber:#d29922; --blue:#58a6ff;
+    --r:12px; --max:920px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg); line-height:1.7;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--acc); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--max); margin:0 auto; padding:0 24px}
+
+  header{padding:72px 0 56px; border-bottom:1px solid var(--line)}
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px; font-size:12px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--acc); border:1px solid rgba(163,113,247,.3);
+    background:rgba(163,113,247,.08); padding:5px 12px; border-radius:999px; margin-bottom:22px;
+  }
+  .eyebrow::before{content:""; width:6px; height:6px; border-radius:50%; background:var(--acc)}
+  h1{font-size:clamp(30px,5.2vw,46px); line-height:1.15; margin:0 0 16px; letter-spacing:-.02em; font-weight:700}
+  h1 .thin{font-weight:400; color:var(--muted)}
+  .lede{font-size:clamp(15px,2vw,18px); color:var(--muted); max-width:64ch; margin:0 0 28px}
+  .cta{display:flex; flex-wrap:wrap; gap:12px; margin-bottom:20px}
+  .btn{
+    display:inline-flex; align-items:center; gap:7px; padding:11px 20px; border-radius:var(--r);
+    font-size:14px; font-weight:600; border:1px solid var(--line); background:var(--surface); color:var(--fg);
+    transition:border-color .15s, background .15s, transform .15s;
+  }
+  .btn:hover{border-color:var(--faint); text-decoration:none; transform:translateY(-1px)}
+  .btn.primary{background:var(--acc); border-color:var(--acc); color:#10061f}
+  .btn.primary:hover{background:var(--acc-dim); border-color:var(--acc-dim)}
+  .meta{font-size:13px; color:var(--faint); display:flex; flex-wrap:wrap; gap:8px 18px}
+
+  section{padding:56px 0; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  h2{font-size:24px; margin:0 0 8px; letter-spacing:-.01em; font-weight:650}
+  h2 .zh{color:var(--muted); font-weight:400; font-size:15px; margin-left:10px}
+  .sec-sub{color:var(--muted); font-size:14.5px; margin:0 0 28px; max-width:68ch}
+
+  .grid{display:grid; gap:14px}
+  .grid.c2{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:18px 20px}
+  .card h3{margin:0 0 7px; font-size:15px; font-weight:620; display:flex; align-items:center; gap:8px}
+  .card h3 .dot{width:6px; height:6px; border-radius:50%; background:var(--acc); flex:none}
+  .card p{margin:0; color:var(--muted); font-size:14px}
+
+  pre{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+    padding:16px 18px; overflow-x:auto; font-size:13px; line-height:1.65;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; color:#d6dae2;
+  }
+  code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; font-size:.92em}
+  p code,li code,.card code{background:var(--surface-2); border:1px solid var(--line); padding:1.5px 6px; border-radius:5px; color:#c3d0e0}
+  .filelabel{font-size:12.5px; color:var(--faint); margin:0 0 8px; font-family:ui-monospace,Menlo,monospace}
+
+  table{width:100%; border-collapse:collapse; font-size:14px; margin:0 0 8px}
+  th,td{text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--muted); font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em}
+  td code{font-size:12.5px}
+
+  ul{color:var(--muted); padding-left:20px; margin:0}
+  li{margin:7px 0}
+  li strong{color:var(--fg); font-weight:600}
+
+  .note{background:rgba(163,113,247,.08); border:1px solid rgba(163,113,247,.24); border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0; font-size:14px; color:var(--muted)}
+  .note strong{color:var(--fg)}
+  .warn{background:rgba(210,153,34,.08); border:1px solid rgba(210,153,34,.24); border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0; font-size:14px; color:var(--muted)}
+  .warn strong{color:var(--fg)}
+
+  .models{display:flex; flex-wrap:wrap; gap:8px; margin:0}
+  .models span{background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:6px 13px; font-size:13px; font-family:ui-monospace,Menlo,monospace; color:#c3d0e0}
+
+  .status{display:grid; gap:10px; margin:0}
+  .status div{display:flex; gap:12px; align-items:baseline; font-size:14px; color:var(--muted)}
+  .status b{color:var(--green); font-family:ui-monospace,Menlo,monospace; font-size:13px; flex:none}
+
+  footer{padding:36px 0 56px; color:var(--faint); font-size:13px}
+  footer .wrap{display:flex; flex-wrap:wrap; gap:10px 22px; justify-content:space-between}
+
+  @media (max-width:640px){
+    header{padding:48px 0 40px}
+    section{padding:40px 0}
+    .wrap{padding:0 18px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="eyebrow">CLIProxyAPI Provider 插件</span>
+    <h1>Qoder Global<br><span class="thin">Qoder 国际版（qoder.com）插件</span></h1>
+    <p class="lede">
+      把 Qoder 国际版封装成 CLIProxyAPI 的 Provider 插件。执行器把 OpenAI chat-completions 请求
+      原样转发到上游，完整保留 <code>tools</code> / <code>tool_calls</code> / <code>tool_call_id</code>，
+      可直接用于 ZCode / Claude Code 的工具循环；并附带 campaign 签到、积分面板与 token 自动保活。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/xinzengxx/cpa-plugin">⌨ 源码与 Release</a>
+      <a class="btn" href="https://github.com/xinzengxx/cpa-plugin/tree/main/qoder">📁 插件目录</a>
+      <a class="btn" href="#install">📦 安装</a>
+    </div>
+    <div class="meta">
+      <span>Go · c-shared</span>
+      <span>版本 v0.1.0</span>
+      <span>OpenAI 兼容透传</span>
+      <span>单模型 claude-opus-5-5</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>模型</h2>
+    <p class="sec-sub">
+      v1 只暴露这一个模型；其他模型请求会返回 <code>model_not_supported</code>，不会静默回退到 Auto。
+    </p>
+    <table>
+      <thead><tr><th>客户端调用名</th><th>上游 key</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>claude-opus-5-5</code></td><td><code>ultimate</code></td><td>Qoder 国际版「极致」模型；上游真实来源以官方为准</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>功能</h2>
+    <div class="grid c2">
+      <div class="card">
+        <h3><span class="dot"></span>OpenAI 兼容透传</h3>
+        <p>请求原样转发到 <code>https://api2-v2.qoder.sh/model/v1/chat/completions</code>，保留 tools、tool_calls、tool_call_id。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>双登录方式</h3>
+        <p>OAuth 设备授权（CPA 管理面板 → Auth → Qoder 登录卡片），或 PAT 导入（面板顶部「导入 Qoder Global 凭证」）。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>campaign 签到</h3>
+        <p>面板支持单账号 / 全部签到，自动签到 10:00 / 21:00，签到后返回最新积分快照。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>积分面板</h3>
+        <p>账号卡片：昵称 / 积分 / 计划 / 签到状态 / 操作，外加最近调用记录。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>token 自动保活</h3>
+        <p>定时刷新访问 token，避免会话过期导致整条 provider 不可用。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>路由稳定</h3>
+        <p>若 CPA 中已有其他 provider 暴露同名 <code>claude-opus-5-5</code>，把本插件的 <code>priority</code> 调高即可稳定路由到 qoder。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>安装</h2>
+    <pre><code>cd qoder
+CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-X main.version=0.1.0" -o qoder.dylib .
+cp qoder.dylib ~/.cli-proxy-api/plugins/</code></pre>
+    <pre><code>plugins:
+  configs:
+    qoder:
+      enabled: true
+      priority: 200   # 其他 provider 也暴露 claude-opus-5-5 时，用它钉住 qoder
+      # checkin_auto: true
+      # token_keepalive: true
+      # checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"..."}'</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>每日签到<span class="zh">100 Credits</span></h2>
+    <p class="sec-sub">
+      面板支持单账号 / 全部签到，自动签到 10:00 / 21:00。
+      国际版的每日 100 Credits 活动<strong>只对真实设备指纹下发</strong>：UID 派生的机器头能拉到部分活动，
+      但 <code>CLAIM_BENEFIT</code> 不会出现。macOS 官方客户端所在机器可运行：
+    </p>
+    <pre><code>./scripts/detect_fingerprint.sh</code></pre>
+    <p class="sec-sub">把输出整行填入配置（注意输出含设备 token，不要外传）：</p>
+    <pre><code>checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"...","machine_code":"..."}'</code></pre>
+    <div class="note">
+      没有本机客户端时，可先在官方 Qoder 客户端领取一次（之后懒下发），或从官方客户端抓包取得
+      <code>machine_token</code> / <code>machine_type</code>。配置后重启 CPA，面板签到即可看到当日活动；
+      当天已领取会显示「今日已签到」。
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>实测记录<span class="zh">2026-10-21</span></h2>
+    <div class="status">
+      <div><b>200</b><span>非流式 <code>claude-opus-5-5</code>：上游 model=<code>ultimate</code>，usage 正常。</span></div>
+      <div><b>200</b><span>流式简单对话：标准 OpenAI chunk。</span></div>
+      <div><b>200</b><span>流式工具调用：<code>tool_calls</code> 增量透传；非流式工具往返（tool_call → tool result → 最终回答）通过。</span></div>
+      <div><b>200</b><span>Anthropic <code>/v1/messages</code>：<code>ANTHROPIC_OK</code>。</span></div>
+      <div><b>200</b><span>签到 campaign：上游返回当日 <code>CLAIMED</code>；派生机器头可正常拉取活动列表。</span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>已知限制</h2>
+    <div class="warn">
+      <strong>Ultimate 权益不稳定</strong>：同一账号的部分请求会返回上游 <code>provider_error</code>
+      （如 <code>model "claude-opus-4-6" is not available for this account</code>、Bedrock
+      <code>InvokeModelWithResponseStream</code> 显式拒绝、<code>Required egress proxy not available</code>）。
+      这是 Qoder 上游路由 / 套餐权益问题，插件会把原始错误透出；失败请求可能触发 CPA 60 秒账号冷却。
+      建议使用有 Ultimate / 极致权益的付费账号。
+    </div>
+    <div class="warn">
+      <strong>图片 data URL</strong>：上游对 <code>data:image/...</code> 返回 <code>Could not process image</code>。
+      v1 未实现 COSY 图片上传，需要图片输入时走二期上传链路。
+    </div>
+    <div class="warn">
+      <strong>签到</strong>：国际版活动按设备指纹下发；新号先在官方客户端领取一次（之后懒下发），
+      或在配置中提供真实 <code>checkin_fingerprint</code>。
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Qoder Global · MIT License</span>
+    <span>
+      <a href="https://github.com/xinzengxx/cpa-plugin">GitHub</a> ·
+      <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI</a> ·
+      <a href="https://qoder.com">qoder.com</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

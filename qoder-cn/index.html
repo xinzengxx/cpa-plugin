@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QoderWork · 腾讯 Qoder 中国区插件 for CLIProxyAPI</title>
+<meta name="description" content="把腾讯 Qoder（qoder.com.cn）封装成 CLIProxyAPI 的 Provider 插件：OAuth / PAT 双登录、COSY 签名推理、Qwen + DeepSeek 动态模型、每日签到、积分面板、token 自动保活。">
+<style>
+  :root{
+    --bg:#0d1117; --surface:#161b22; --surface-2:#1c2230; --line:#262d38;
+    --fg:#e6edf3; --muted:#9198a1; --faint:#6e7681;
+    --acc:#4a9eff; --acc-dim:#3d8bfd; --green:#3fb950; --amber:#d29922; --purple:#a371f7;
+    --r:12px; --max:920px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--fg); line-height:1.7;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--acc); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:var(--max); margin:0 auto; padding:0 24px}
+
+  header{padding:72px 0 56px; border-bottom:1px solid var(--line)}
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px; font-size:12px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--acc); border:1px solid rgba(74,158,255,.3);
+    background:rgba(74,158,255,.08); padding:5px 12px; border-radius:999px; margin-bottom:22px;
+  }
+  .eyebrow::before{content:""; width:6px; height:6px; border-radius:50%; background:var(--acc)}
+  h1{font-size:clamp(30px,5.2vw,46px); line-height:1.15; margin:0 0 16px; letter-spacing:-.02em; font-weight:700}
+  h1 .thin{font-weight:400; color:var(--muted)}
+  .lede{font-size:clamp(15px,2vw,18px); color:var(--muted); max-width:64ch; margin:0 0 28px}
+  .cta{display:flex; flex-wrap:wrap; gap:12px; margin-bottom:20px}
+  .btn{
+    display:inline-flex; align-items:center; gap:7px; padding:11px 20px; border-radius:var(--r);
+    font-size:14px; font-weight:600; border:1px solid var(--line); background:var(--surface); color:var(--fg);
+    transition:border-color .15s, background .15s, transform .15s;
+  }
+  .btn:hover{border-color:var(--faint); text-decoration:none; transform:translateY(-1px)}
+  .btn.primary{background:var(--acc); border-color:var(--acc); color:#04101f}
+  .btn.primary:hover{background:var(--acc-dim); border-color:var(--acc-dim)}
+  .meta{font-size:13px; color:var(--faint); display:flex; flex-wrap:wrap; gap:8px 18px}
+
+  section{padding:56px 0; border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  h2{font-size:24px; margin:0 0 8px; letter-spacing:-.01em; font-weight:650}
+  h2 .zh{color:var(--muted); font-weight:400; font-size:15px; margin-left:10px}
+  .sec-sub{color:var(--muted); font-size:14.5px; margin:0 0 28px; max-width:68ch}
+
+  .grid{display:grid; gap:14px}
+  .grid.c2{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .grid.c3{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:18px 20px}
+  .card h3{margin:0 0 7px; font-size:15px; font-weight:620; display:flex; align-items:center; gap:8px}
+  .card h3 .dot{width:6px; height:6px; border-radius:50%; background:var(--acc); flex:none}
+  .card p{margin:0; color:var(--muted); font-size:14px}
+
+  pre{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+    padding:16px 18px; overflow-x:auto; font-size:13px; line-height:1.65;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; color:#d6dae2;
+  }
+  code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; font-size:.92em}
+  p code,li code,.card code{background:var(--surface-2); border:1px solid var(--line); padding:1.5px 6px; border-radius:5px; color:#c3d0e0}
+  .filelabel{font-size:12.5px; color:var(--faint); margin:0 0 8px; font-family:ui-monospace,Menlo,monospace}
+
+  table{width:100%; border-collapse:collapse; font-size:14px; margin:0 0 8px}
+  th,td{text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{color:var(--muted); font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em}
+  td code{font-size:12.5px}
+
+  ul{color:var(--muted); padding-left:20px; margin:0}
+  li{margin:7px 0}
+  li strong{color:var(--fg); font-weight:600}
+
+  .note{background:rgba(74,158,255,.07); border:1px solid rgba(74,158,255,.22); border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0; font-size:14px; color:var(--muted)}
+  .note strong{color:var(--fg)}
+  .warn{background:rgba(210,153,34,.08); border:1px solid rgba(210,153,34,.24); border-left-width:3px; border-radius:var(--r); padding:15px 18px; margin:20px 0; font-size:14px; color:var(--muted)}
+  .warn strong{color:var(--fg)}
+
+  .models{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px}
+  .models span{background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:6px 13px; font-size:13px; font-family:ui-monospace,Menlo,monospace; color:#c3d0e0}
+  .group{font-size:12px; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px}
+
+  footer{padding:36px 0 56px; color:var(--faint); font-size:13px}
+  footer .wrap{display:flex; flex-wrap:wrap; gap:10px 22px; justify-content:space-between}
+
+  @media (max-width:640px){
+    header{padding:48px 0 40px}
+    section{padding:40px 0}
+    .wrap{padding:0 18px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="eyebrow">CLIProxyAPI Provider 插件</span>
+    <h1>QoderWork<br><span class="thin">腾讯 Qoder 中国区（qoder.com.cn）插件</span></h1>
+    <p class="lede">
+      把 Qoder 中国区封装成 CLIProxyAPI 的 Provider 插件。OAuth 设备授权 / PAT 双登录，
+      纯软件 COSY 签名对接上游 SSE 流式推理，动态拉取 Qwen + DeepSeek 模型，
+      每日签到领 Credits，外加积分面板与 token 自动保活。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/xinzengxx/cpa-plugin">⌨ 源码与 Release</a>
+      <a class="btn" href="https://github.com/xinzengxx/cpa-plugin/tree/main/qoderwork">📁 插件目录</a>
+      <a class="btn" href="#install">📦 安装</a>
+    </div>
+    <div class="meta">
+      <span>Go · c-shared</span>
+      <span>版本 v0.4.1</span>
+      <span>macOS · Linux · Windows</span>
+      <span>Qwen + DeepSeek</span>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>功能</h2>
+    <div class="grid c2">
+      <div class="card">
+        <h3><span class="dot"></span>双登录方式</h3>
+        <p>① OAuth 设备授权（PKCE，浏览器授权，<code>dt-</code> 30 天 + <code>drt-</code> 1 年自动旋转）② PAT 导入（<code>pt-</code>，长期有效兜底）——两家族可共存于同一 auth 文件。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>登录自动领包</h3>
+        <p>OAuth 登录成功后自动判断并领取一次性 Pro 升级包（eligibility → claim）。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>COSY 推理</h3>
+        <p>RSA 包 AES 会话密钥 + MD5 请求签名，纯 Go 实现，对接 <code>gateway.qoder.com.cn</code> SSE 流式。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>图片输入</h3>
+        <p>支持 OpenAI <code>image_url</code> 和 Anthropic <code>image</code> 块；自动上传到 Qoder 再以 <code>messages[].image_url</code> 发送。png/jpeg/gif/webp，单图 ≤10MB，最多 5 张。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>动态模型</h3>
+        <p>COSY 拉取 <code>/algo/api/v2/model/list</code>（chat scene），14 静态模型兜底；只暴露 Qwen / DeepSeek 系列。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>每日签到</h3>
+        <p>面板手动签到（单账号 / 批量）+ 10:00 / 21:00 定时自动签到，签到后返回最新积分快照。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>积分面板</h3>
+        <p>账号卡片：昵称 / 积分 / 计划 / 签到状态 / 操作（签到 / 刷新 / 选用），外加最近 20 条调用记录。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>token 保活</h3>
+        <p>22:00 定时刷新；按 token 前缀路由（<code>drt-</code> → deviceToken/refresh，<code>jrt-</code> → jobToken/refresh），PAT 永不劫持 OAuth 刷新。</p>
+      </div>
+    </div>
+    <div class="note">
+      <strong>auth 隔离</strong>：文件名前缀 <code>qoderwork-</code> 过滤，与 workbuddy 等其他插件互不干扰。
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>模型<span class="zh">只暴露 Qwen + DeepSeek</span></h2>
+    <p class="sec-sub">
+      GLM 走 <code>workbuddy-cpa</code>；Auto / GLM / Kimi / MiniMax 不会出现在 qoderwork 的模型列表里，executor 也会拒绝非 Qwen/DeepSeek 请求。
+      模型清单由 COSY 动态拉取，静态表仅作冷启动兜底。
+    </p>
+    <div class="group">Qwen</div>
+    <div class="models">
+      <span>qwen3.8-max</span><span>qwen3.8-max-preview</span><span>qwen3.8-flash</span>
+      <span>qwen3.7-max</span><span>qwen3.7-plus</span><span>qwen3.7-flash</span>
+    </div>
+    <div class="group">DeepSeek</div>
+    <div class="models">
+      <span>deepseek-v4-pro</span><span>deepseek-v4-flash</span><span>deepseek-v4.1-flash</span>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>安装</h2>
+    <p class="sec-sub">前置：运行中的 CLIProxyAPI（带 CGO / 插件支持）。</p>
+
+    <h3 style="font-size:15px;margin:0 0 8px">从 Release（推荐）</h3>
+    <pre><code># 按你的平台下载（示例 linux/arm64）
+unzip qoderwork_0.4.1_linux_arm64.zip
+cp qoderwork.so /path/to/cliproxyapi/plugins/qoderwork.so</code></pre>
+
+    <h3 style="font-size:15px;margin:26px 0 8px">从源码编译</h3>
+    <pre><code>cd qoderwork
+CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-X main.version=0.4.1" -o qoderwork.so .
+cp qoderwork.so /path/to/cliproxyapi/plugins/</code></pre>
+
+    <h3 style="font-size:15px;margin:26px 0 8px">config.yaml</h3>
+    <pre><code>plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    qoderwork:
+      enabled: true
+
+# 模型别名（可选）
+oauth-model-alias:
+  qoderwork:
+    - name: qmodel_preview
+      alias: qoder/qwen3.8-max
+    - name: qmodel_latest
+      alias: qoder/qwen3.7-max</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>登录</h2>
+    <div class="grid c2">
+      <div class="card">
+        <h3><span class="dot"></span>方式一 · OAuth（推荐）</h3>
+        <p>CPA 管理面板 → Auth 文件 → QoderWork OAuth 登录卡片 → 浏览器打开授权链接 → 登录 qoder.com.cn（阿里云 SSO）→ 点 Continue 授权。插件自动轮询拿 token 落盘（<code>dt-</code>/<code>drt-</code>），并自动领取 Pro 升级包。</p>
+      </div>
+      <div class="card">
+        <h3><span class="dot"></span>方式二 · PAT 导入</h3>
+        <p>qoder.com.cn → 设置 → Personal Access Token → 创建（<code>pt-</code> 开头）→ 插件面板右上角「导入 QoderWork 凭证」→ 粘贴 → 导入。插件自动换 jobToken（<code>jt-</code>/<code>jrt-</code>）落盘。</p>
+      </div>
+    </div>
+    <p class="sec-sub" style="margin-top:22px">
+      面板地址：<code>/v0/resource/plugins/qoderwork/panel</code>（需 management key）。
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>每日签到<span class="zh">每天领 100 Credits</span></h2>
+    <p class="sec-sub">
+      签到走 Qoder 新版 campaign 接口：<code>/sash/api/v1/me/campaigns</code> + <code>/campaigns/{id}/claim</code>，
+      每日 10:00（UTC+8）刷新「每天领 100 Credits」；旧 <code>/daily-check-in</code> 仅作 fallback。
+      面板可单账号签到，也可「全部签到」批量执行。
+    </p>
+    <div class="warn">
+      <strong>设备指纹</strong>：上游遇到<strong>未知的 <code>Cosy-MachineToken</code></strong> 会返回 HTTP 200 + <strong>空活动列表</strong>（不报错），
+      面板于是显示「当前账号无可用签到活动」。插件默认不发送任何机器头——此时上游正常下发活动。
+      若要领取仅对真实设备下发的活动，在装了 Qoder CN 客户端的机器上运行 <code>./scripts/detect_fingerprint.sh</code>，
+      把输出填进插件配置即可（输出含设备 token，不要外传）：
+    </div>
+    <pre><code>plugins:
+  configs:
+    qoderwork:
+      checkin_fingerprint: '{"machine_id":"...","machine_token":"...","machine_type":"..."}'</code></pre>
+    <p class="sec-sub">
+      必填 <code>machine_id</code> / <code>machine_token</code> / <code>machine_type</code>；字段不全时整体忽略该配置，不会发出半截指纹。
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>凭证家族与刷新</h2>
+    <table>
+      <thead><tr><th>字段</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>accessToken</code></td><td><code>dt-</code>（OAuth，约 30 天）或 <code>jt-</code>（PAT 交换，24 小时）</td></tr>
+        <tr><td><code>refreshToken</code></td><td><code>drt-</code>（约 1 年，自动旋转）或 <code>jrt-</code>（48 小时）</td></tr>
+        <tr><td><code>personalToken</code></td><td><code>pt-</code>（长期兜底，导入即永久）</td></tr>
+      </tbody>
+    </table>
+    <ul style="margin-top:18px">
+      <li>刷新路由按 <code>refreshToken</code> 前缀：<code>drt-</code> → <code>deviceToken/refresh</code>；<code>jrt-</code> → <code>jobToken/refresh</code> → 失败回退 PAT re-exchange。</li>
+      <li><code>personalToken</code> 永不主动覆盖活跃 token，只做最终兜底。</li>
+      <li>宿主 15 分钟 auto-refresh + 插件 22:00 keepalive 均按此规则。</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>在带工具的 Agent 中使用<span class="zh">客户端模式</span></h2>
+    <p class="sec-sub">
+      请求里带 <code>tools</code> 时，插件自动进入客户端模式：使用客户端自己的 system prompt 和工具定义，
+      不再注入 Qoder 的 baseprompt system 与 14 个内置工具；完整保留 <code>assistant.tool_calls</code> 与
+      <code>role:"tool"</code> 的 <code>tool_call_id</code>，支持并行工具调用和工具结果续跑。
+      工具预算为最多 64 个 / 128KB，超出部分截断。
+    </p>
+    <div class="note">
+      已通过 CPA 两条入口实测：OpenAI <code>/v1/chat/completions</code> 和 Anthropic <code>/v1/messages</code>
+      均能完成「工具调用 → tool_result → 最终回答」的完整闭环（qwen3.8-max / deepseek-v4-pro / deepseek-v4.1-flash）。
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>QoderWork · MIT License</span>
+    <span>
+      <a href="https://github.com/xinzengxx/cpa-plugin">GitHub</a> ·
+      <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI</a> ·
+      <a href="https://qoder.com.cn">qoder.com.cn</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>
