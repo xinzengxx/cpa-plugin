@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CPA Plugins · CLIProxyAPI Provider 插件集</title>
-<meta name="description" content="CLIProxyAPI 的 Provider 插件集：QoderWork（腾讯 Qoder 中国区）、Qoder Global（Qoder 国际版）、workbuddy-cpa（腾讯 CodeBuddy）。">
+<meta name="description" content="CLIProxyAPI 的 Provider 插件集：QoderWork（腾讯 Qoder 中国区）、workbuddy-cpa（腾讯 CodeBuddy，含国际版 deepseek）。">
 <style>
   :root{
     --bg:#0d1117; --surface:#161b22; --surface-2:#1c2230; --line:#262d38;
@@ -97,7 +97,7 @@
     <h1>CPA Plugins<br><span class="thin">把各家 AI 服务接进 CLIProxyAPI</span></h1>
     <p class="lede">
       每个插件都是一个独立的 Provider：客户端用 OpenAI / Anthropic 协议请求，CPA 负责路由、
-      多账号轮转、额度面板与 token 生命周期。以下三个插件各自独立版本、独立发布。
+      多账号轮转、额度面板与 token 生命周期。以下两个插件各自独立版本、独立发布。
     </p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/xinzengxx/cpa-plugin">⌨ GitHub 源码</a>
@@ -128,35 +128,20 @@
         </div>
       </div>
       <div class="card">
-        <span class="tag gl">国际版 · Go</span>
-        <h3>Qoder Global</h3>
-        <p>
-          Qoder 国际版（qoder.com）。OpenAI 兼容透传，完整保留 tools / tool_calls / tool_call_id，
-          直接用于 ZCode、Claude Code 的工具循环。campaign 签到按真实设备指纹下发。
-        </p>
-        <div class="links">
-          <a href="qoder-global/">介绍页 →</a>
-          <a href="https://github.com/xinzengxx/cpa-plugin/tree/main/qoder">源码 →</a>
-        </div>
-        <div class="referral">
-          <span class="rf-tag">邀请码</span>
-          <a href="https://qoder.com/activities?referral_code=atiGUKByxBemlCDZd8hRcP0WFHIVJ09g" target="_blank" rel="noopener">注册领 100 Credits</a>
-        </div>
-      </div>
-      <div class="card">
         <span class="tag wb">CodeBuddy · Rust</span>
         <h3>workbuddy-cpa</h3>
         <p>
           腾讯 CodeBuddy。Rust 原生实现，只走 C ABI 与 JSON RPC 契约，不依赖宿主 Go SDK 版本。
-          扫码登录、多账号管理、手动批量签到、三区额度面板，仅暴露 GLM 系列。
+          扫码登录、多账号管理、手动批量签到、三区额度面板。国内版只暴露 GLM 系列，
+          国际版插件（<code>workbuddy-intl-cpa</code>）只暴露 <code>deepseek-v4.1-flash</code>，两者可同时安装。
         </p>
         <div class="links">
           <a href="https://xinzengxx.github.io/workbuddy-cpa/">介绍页 →</a>
           <a href="https://github.com/xinzengxx/workbuddy-cpa">源码 →</a>
         </div>
         <div class="referral">
-          <span class="rf-tag">邀请码</span>
-          <a href="https://www.workbuddy.cn/events/invite?inviteCode=j6qd4iwg7" target="_blank" rel="noopener">注册领签到积分</a>
+          <span class="rf-tag">国际版邀请</span>
+          <a href="https://workbuddy.ai/invite?code=A4WZHXGC" target="_blank" rel="noopener">注册领试用额度</a>
         </div>
       </div>
     </div>
@@ -166,19 +151,19 @@
 <section>
   <div class="wrap">
     <h2>模型一览</h2>
-    <p class="sec-sub">三个插件各自只暴露自己那部分的模型，避免 CPA 把请求路由到不该去的 provider。</p>
+    <p class="sec-sub">两个插件各自只暴露自己那部分的模型，避免 CPA 把请求路由到不该去的 provider。</p>
     <p class="sec-sub" style="margin-bottom:10px"><strong style="color:var(--fg)">QoderWork</strong> — Qwen + DeepSeek</p>
     <div class="chips">
       <span>qwen3.8-max</span><span>qwen3.8-flash</span><span>qwen3.7-max</span>
       <span>qwen3.7-plus</span><span>qwen3.7-flash</span>
       <span>deepseek-v4-pro</span><span>deepseek-v4-flash</span><span>deepseek-v4.1-flash</span>
     </div>
-    <p class="sec-sub" style="margin:22px 0 10px"><strong style="color:var(--fg)">Qoder Global</strong></p>
-    <div class="chips"><span>claude-opus-5-5</span><span>deepseek-v4.1-flash</span></div>
     <p class="sec-sub" style="margin:22px 0 10px"><strong style="color:var(--fg)">workbuddy-cpa</strong> — GLM</p>
     <div class="chips">
       <span>glm-5.1</span><span>glm-5.2</span><span>glm-5.3</span><span>glm-5.3-flash</span><span>glm-5v-turbo</span>
     </div>
+    <p class="sec-sub" style="margin:22px 0 10px"><strong style="color:var(--fg)">workbuddy-intl-cpa</strong> — 国际版</p>
+    <div class="chips"><span>deepseek-v4.1-flash</span></div>
   </div>
 </section>
 
@@ -188,7 +173,7 @@
     <p class="sec-sub">所有插件都是 c-shared 动态库（CPA 的 Go 插件需宿主与插件共享包逐字节同源，升级易失效）。</p>
     <p class="sec-sub" style="margin-bottom:12px"><strong style="color:var(--fg)">1. 把动态库放进 CPA 插件目录</strong></p>
     <p class="sec-sub" style="margin-bottom:12px">
-      文件名（去扩展名）就是插件 ID：<code>qoderwork</code> · <code>qoder</code> · <code>workbuddy-cpa</code>。
+      文件名（去扩展名）就是插件 ID：<code>qoderwork</code> · <code>workbuddy-cpa</code> · <code>workbuddy-intl-cpa</code>。
     </p>
     <p class="sec-sub" style="margin-bottom:10px"><strong style="color:var(--fg)">2. 在 config.yaml 里启用</strong></p>
     <pre style="background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:16px 18px; overflow-x:auto; font-size:13px; line-height:1.65; font-family:ui-monospace,Menlo,monospace; color:#d6dae2; margin:0"><code>plugins:
@@ -196,8 +181,8 @@
   dir: "~/.cli-proxy-api/plugins"
   configs:
     qoderwork:   { enabled: true }
-    qoder:        { enabled: true, priority: 200 }
-    workbuddy-cpa: { enabled: true, priority: 100 }</code></pre>
+    workbuddy-cpa: { enabled: true, priority: 100 }
+    workbuddy-intl-cpa: { enabled: true, priority: 100 }</code></pre>
     <p class="sec-sub" style="margin-top:18px">
       也可以在 CPA 管理面板 → 插件页直接点「启用」，会自动写入配置并热加载，无需重启。
     </p>
